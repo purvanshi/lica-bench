@@ -14,7 +14,8 @@ scripts/run_benchmarks.py   →  load_data → inference → evaluate
 | `src/design_benchmarks/tasks/*.py` | One file per domain. Contains `@benchmark` classes. |
 | `src/design_benchmarks/base.py` | `BaseBenchmark`, `BenchmarkMeta`, `TaskType`, `@benchmark` decorator. |
 | `src/design_benchmarks/registry.py` | Auto-discovers all `@benchmark` classes via `pkgutil.walk_packages`. |
-| `scripts/run_benchmarks.py` | Runs benchmarks. `--data` and `--dataset-root` are required for normal runs. `--data` points at `…/benchmarks/<domain>` (or a task subdirectory). `--list` shows **ready** for all registered tasks. |
+| `scripts/run_benchmarks.py` | Runs benchmarks (`--dataset-root` required; `--data` optional). `--list` shows **ready**. |
+| `src/design_benchmarks/benchmark_data_paths.py` | Default `benchmarks/` subpath per benchmark id. |
 | `src/design_benchmarks/metrics/` | Reusable metric functions (IoU, FID, SSIM, LPIPS, edit distance, font-name normalisation). |
 | `src/design_benchmarks/utils/` | Shared helpers (image array handling, text cleanup, layout path resolution). |
 
@@ -36,7 +37,7 @@ Full details in the root [README.md](../README.md#benchmark-dataset-layout).
 
 ## Adding a benchmark to an existing domain
 
-1. Open `src/design_benchmarks/tasks/<domain>.py` (e.g. `layout.py`).
+1. Open `src/design_benchmarks/tasks/<domain>.py` (e.g. `layout.py`). Add the id to `benchmark_data_paths.BENCHMARK_BUNDLE_SUBPATHS` when the release folder is fixed.
 
 2. Add a class:
 
@@ -53,7 +54,7 @@ class MyNewTask(BaseBenchmark):
     pipeline_implemented = True
 
     meta = BenchmarkMeta(
-        id="layout-8",                         # <domain>-<n>, unique in registry
+        id="layout-9",                         # <domain>-<n>, unique in registry
         name="My New Layout Task",
         task_type=TaskType.UNDERSTANDING,      # or GENERATION
         domain="layout",                       # matches the file / benchmarks/<domain>/
@@ -78,7 +79,7 @@ class MyNewTask(BaseBenchmark):
 
 ```bash
 pip install -e .
-python scripts/run_benchmarks.py --list | grep layout-8
+python scripts/run_benchmarks.py --list | grep layout-9
 ```
 
 ### What each method does
@@ -92,7 +93,7 @@ python scripts/run_benchmarks.py --list | grep layout-8
 
 ### Conventions
 
-- **ID format:** `<domain>-<n>` (e.g. `layout-8`, `temporal-6`). **Ids must be unique** in the whole registry. When adding a task, use the next unused `<n>` in that domain (no gaps in the shipped set).
+- **ID format:** `<domain>-<n>` (e.g. `layout-9`, `temporal-6`). **Ids must be unique** in the whole registry. When adding a task, use the next unused `<n>` in that domain (no gaps in the shipped set).
 - **`domain` field** must match the `tasks/*.py` filename and, for most tasks, the `benchmarks/<domain>/` folder in the Lica release.
 - **All tasks must be fully implemented** — `load_data`, `build_model_input`, and `evaluate` must be real implementations with `pipeline_implemented = True`.
 - **Auto-discovery**: the registry uses `pkgutil.walk_packages` on the `design_benchmarks` package. You do **not** edit `registry.py` or import your class anywhere — just decorate with `@benchmark` and it is found.
@@ -133,9 +134,9 @@ Available extras:
 
 See `pyproject.toml` `[project.optional-dependencies]` for the full list.
 
-## End-to-end walkthrough: adding `layout-8`
+## End-to-end walkthrough: adding `layout-9`
 
-`layout-8` is a **placeholder** for the task you are adding; it is not in the repo until you implement it. To exercise steps 5–6 against **shipping** data first, substitute an existing id (for example `layout-4` or `layout-5`) instead of `layout-8`.
+`layout-9` is a **placeholder** for the task you are adding; it is not in the repo until you implement it. To exercise steps 5–6 against **shipping** data first, substitute an existing id (for example `layout-4` or `layout-5`) instead of `layout-9`.
 
 ```bash
 # 1. Edit the task file
@@ -143,22 +144,23 @@ See `pyproject.toml` `[project.optional-dependencies]` for the full list.
 
 # 2. Check registration
 pip install -e .
-python scripts/run_benchmarks.py --list | grep layout-8
+python scripts/run_benchmarks.py --list | grep layout-9
 
 # 3. Implement load_data, build_model_input, evaluate; set pipeline_implemented = True
 
 # 4. Download Lica data (includes benchmarks/layout/)
 python scripts/download_data.py
 
-# 5. Stub run (validates load_data + build_model_input on real data, no API keys)
-python scripts/run_benchmarks.py --stub-model --benchmarks layout-8 \
-    --data data/lica-benchmarks-dataset/benchmarks/layout \
+# 5. Stub run (after adding benchmark_data_paths entry for layout-9)
+python scripts/run_benchmarks.py --stub-model --benchmarks layout-9 \
     --dataset-root data/lica-benchmarks-dataset --n 5
 
+# Before the path map exists, pass --data explicitly:
+#   --data data/lica-benchmarks-dataset/benchmarks/layout/MyTaskFolder
+
 # 6. Real run
-python scripts/run_benchmarks.py --benchmarks layout-8 \
+python scripts/run_benchmarks.py --benchmarks layout-9 \
     --provider openai --model-id gpt-5.4 \
-    --data data/lica-benchmarks-dataset/benchmarks/layout \
     --dataset-root data/lica-benchmarks-dataset --n 5
 ```
 
@@ -166,9 +168,10 @@ python scripts/run_benchmarks.py --benchmarks layout-8 \
 
 - [ ] `python scripts/run_benchmarks.py --list` shows your new id(s) as **ready**
 - [ ] `BenchmarkMeta.id` is unique (registry raises on duplicates)
-- [ ] `meta.domain` matches `tasks/<file>.py` name and the `benchmarks/<domain>/` path users pass via `--data`
+- [ ] `meta.domain` matches `tasks/<file>.py` name and the `benchmarks/<domain>/` tree in the dataset release
+- [ ] `BENCHMARK_BUNDLE_SUBPATHS` includes the new id (or document that `--data` is required)
 - [ ] `pipeline_implemented = True` and all three pipeline methods are implemented
-- [ ] `load_data` raises a clear error if `--data` points at the wrong directory
+- [ ] `load_data` raises a clear error if the resolved data directory is wrong
 - [ ] Shipped inputs under `benchmarks/<domain>/` are documented (dataset release + task docstrings)
 - [ ] No new hard dependencies added to core `dependencies` (use extras)
 - [ ] `ruff check` passes on your files (`pip install -e ".[dev]"`)

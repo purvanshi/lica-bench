@@ -3,6 +3,7 @@
 from importlib.metadata import PackageNotFoundError, version
 
 from .base import BaseBenchmark, BenchmarkMeta, TaskType, benchmark
+from .benchmark_data_paths import BENCHMARK_BUNDLE_SUBPATHS, resolve_benchmark_data_dir
 from .evaluation.reporting import BenchmarkResult, RunReport
 from .evaluation.tracker import EvaluationTracker
 from .registry import BenchmarkRegistry
@@ -15,6 +16,7 @@ except PackageNotFoundError:  # e.g. running from a checkout without install
 
 __all__ = [
     "__version__",
+    "BENCHMARK_BUNDLE_SUBPATHS",
     "BaseBenchmark",
     "BenchmarkMeta",
     "BenchmarkRegistry",
@@ -24,4 +26,5 @@ __all__ = [
     "RunReport",
     "TaskType",
     "benchmark",
+    "resolve_benchmark_data_dir",
 ]

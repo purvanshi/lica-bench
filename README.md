@@ -6,13 +6,12 @@ Benchmarks use the [Lica dataset](https://github.com/purvanshi/lica-dataset) (1,
 
 ## Benchmarks
 
-Each task is one of two types: **understanding** (answer a question or edit an artifact), or **generation** (produce a new artifact). 47 tasks span eight domains across 41 benchmarks:
+Each task is one of two types: **understanding** (answer a question or edit an artifact), or **generation** (produce a new artifact). 46 tasks span seven domains across 40 benchmarks:
 
 | Domain | Tasks | Benchmarks | Description |
 |--------|------:|----------:|-------------|
 | category | 2 | 2 | Design category classification and user intent prediction |
-| image | 2 | 2 | Layer-aware object insertion (reference-guided and description-guided) |
-| layout | 7 | 7 | Spatial reasoning over design canvases (aspect ratio, element counting, component type and detection) and layout generation (intent-to-layout, partial completion, aspect-ratio adaptation) |
+| layout | 8 | 8 | Spatial reasoning over design canvases (aspect ratio, element counting, component type and detection), layout generation (intent-to-layout, partial completion, aspect-ratio adaptation), and layer-aware object insertion (`layout-8`, reference- or description-guided per sample) |
 | lottie | 2 | 2 | Lottie animation generation from text and image |
 | svg | 8 | 8 | SVG reasoning and editing (perceptual and semantic Q/A, bug fixing, optimization, style editing) and generation (text-to-SVG, image-to-SVG, combined input) |
 | template | 6 | 6 | Template matching, retrieval, clustering, and generation (style completion, color transfer, asset swap) |
@@ -57,26 +56,23 @@ python scripts/run_benchmarks.py --list                     # enumerate tasks an
 python scripts/download_data.py                              # → data/lica-benchmarks-dataset/
 ```
 
-Point `--data` at the domain folder under **`benchmarks/`** you need. `--dataset-root` always points at the **`lica-benchmarks-dataset/`** root.
+**`--dataset-root`** is the bundle root (contains `lica-data/` and `benchmarks/`). Task inputs default under `benchmarks/` per `design_benchmarks.benchmark_data_paths`; use **`--data`** to override.
 
 ### 4. Run benchmarks
 
 ```bash
 # Stub model (no API keys; validates load_data + build_model_input on real data)
 python scripts/run_benchmarks.py --stub-model --benchmarks category-1 \
-    --data data/lica-benchmarks-dataset/benchmarks/category/CategoryClassification \
     --dataset-root data/lica-benchmarks-dataset --n 5
 
 # Real model
 python scripts/run_benchmarks.py --benchmarks svg-1 \
     --provider openai --model-id gpt-5.4 \
-    --data data/lica-benchmarks-dataset/benchmarks/svg \
     --dataset-root data/lica-benchmarks-dataset
 
 # Temporal benchmarks (video-based)
 python scripts/run_benchmarks.py --benchmarks temporal-1 \
     --provider gemini \
-    --data data/lica-benchmarks-dataset/benchmarks/temporal/KeyframeOrdering \
     --dataset-root data/lica-benchmarks-dataset
 ```
 
@@ -99,7 +95,7 @@ For **Gemini on Vertex AI** (service account), pass a JSON key file instead of r
 ```bash
 python scripts/run_benchmarks.py --benchmarks svg-1 --provider gemini \
     --credentials /path/to/service-account.json \
-    --data ... --dataset-root ...
+    --dataset-root data/lica-benchmarks-dataset
 ```
 
 The file must be either a **service account** key (`type: service_account`) or JSON containing an `api_key` field.
@@ -129,7 +125,7 @@ lica-benchmarks-dataset/
     └── typography/
 ```
 
-**Using this bundle:** Point **`--dataset-root`** at this directory (the parent of `lica-data/` and `benchmarks/`). Point **`--data`** at the inputs for the benchmark you run—typically a folder under **`benchmarks/<domain>/`** (sometimes a task subfolder; mirror the examples in [Getting started](#4-run-benchmarks) and `scripts/run_benchmarks.py --list`). Paths inside CSVs (for example `image_path`) and in template JSON (`data_root`) are interpreted relative to **`--dataset-root`**, not only relative to `--data`.
+**Using this bundle:** Set **`--dataset-root`** to this directory. CSV `image_path` and template `data_root` entries resolve relative to **`--dataset-root`**.
 
 **What the two trees are:** **`lica-data/`** is the shared Lica corpus (layout JSON, renders, `metadata.csv`). **`benchmarks/`** holds evaluation payloads per domain (CSVs, JSON, manifests, copied assets). Exact filenames differ by task; see the module under `src/design_benchmarks/tasks/<domain>.py` or [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) when adding or packaging data.
 
@@ -140,8 +136,7 @@ lica-bench/
 ├── src/design_benchmarks/
 │   ├── tasks/              # @benchmark classes — one file per domain
 │   │   ├── category.py     #   category-1, category-2
-│   │   ├── image.py        #   image-1, image-2
-│   │   ├── layout.py       #   layout-1 … layout-7
+│   │   ├── layout.py       #   layout-1 … layout-8
 │   │   ├── lottie.py       #   lottie-1, lottie-2
 │   │   ├── svg.py          #   svg-1 … svg-8
 │   │   ├── template.py     #   template-1 … template-6
@@ -155,6 +150,7 @@ lica-bench/
 │   ├── inference/          # Batch API runners, GCS helpers
 │   ├── utils/              # Shared helpers (image, text, layout path resolution)
 │   ├── base.py             # BaseBenchmark, BenchmarkMeta, TaskType, @benchmark
+│   ├── benchmark_data_paths.py  # benchmark id → benchmarks/ subpath
 │   ├── registry.py         # Auto-discovery via pkgutil.walk_packages
 │   └── runner.py           # BenchmarkRunner orchestration
 ├── scripts/
@@ -169,9 +165,14 @@ lica-bench/
 
 ```python
 from pathlib import Path
-from design_benchmarks import BenchmarkRegistry, BenchmarkRunner
+from design_benchmarks import (
+    BenchmarkRegistry,
+    BenchmarkRunner,
+    resolve_benchmark_data_dir,
+)
 from design_benchmarks.models import load_model
 
+root = Path("data/lica-benchmarks-dataset")
 registry = BenchmarkRegistry()
 registry.discover()
 
@@ -180,8 +181,8 @@ models = {"openai": load_model("openai", model_id="gpt-5.4")}
 report = runner.run(
     benchmark_ids=["svg-1"],
     models=models,
-    data_dir=Path("data/lica-benchmarks-dataset/benchmarks/svg"),
-    dataset_root=Path("data/lica-benchmarks-dataset"),
+    data_dir=resolve_benchmark_data_dir("svg-1", root),
+    dataset_root=root,
     n=5,
 )
 print(report.summary())

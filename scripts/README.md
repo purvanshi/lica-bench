@@ -18,11 +18,10 @@ Single entry point for all benchmark operations.
 
 ### Downloaded data + stub model (no API keys)
 
-Use `--stub-model` with `--data` and **`--dataset-root`** (see root README). Both are required for normal runs (not `--list` / `--collect`).
+Use **`--stub-model`** with **`--dataset-root`** pointing at the Lica bundle root. Task folders under **`benchmarks/`** are chosen automatically per benchmark id; pass **`--data`** only to override.
 
 ```bash
 python scripts/run_benchmarks.py --stub-model --benchmarks layout-3 \
-    --data data/lica-benchmarks-dataset/benchmarks/layout/layout4-multi-aspect-ratio \
     --dataset-root data/lica-benchmarks-dataset --n 5
 ```
 
@@ -31,24 +30,20 @@ python scripts/run_benchmarks.py --stub-model --benchmarks layout-3 \
 ```bash
 # API model
 python scripts/run_benchmarks.py --benchmarks svg-1 \
-    --provider gemini --data data/lica-benchmarks-dataset/benchmarks/svg \
-    --dataset-root data/lica-benchmarks-dataset
+    --provider gemini --dataset-root data/lica-benchmarks-dataset
 
 # Local HuggingFace model
 python scripts/run_benchmarks.py --benchmarks svg-6 \
     --provider hf --model-id Qwen/Qwen2.5-Coder-0.5B-Instruct --device auto \
-    --data data/lica-benchmarks-dataset/benchmarks/svg \
     --dataset-root data/lica-benchmarks-dataset
 
 # Local vLLM (GPU, with sampling params)
 python scripts/run_benchmarks.py --benchmarks svg-6 \
     --provider vllm --model-id Qwen/Qwen3-8B --top-k 20 --top-p 0.8 \
-    --data data/lica-benchmarks-dataset/benchmarks/svg \
     --dataset-root data/lica-benchmarks-dataset
 
 # JSON config file (CLI args override config values)
 python scripts/run_benchmarks.py --benchmarks svg-6 --config my_run_config.json \
-    --data data/lica-benchmarks-dataset/benchmarks/svg \
     --dataset-root data/lica-benchmarks-dataset
 ```
 
@@ -57,8 +52,7 @@ python scripts/run_benchmarks.py --benchmarks svg-6 --config my_run_config.json 
 ```bash
 export DESIGN_BENCHMARKS_GCS_BUCKET=your-bucket
 python scripts/run_benchmarks.py --benchmarks svg-1 \
-    --provider gemini --data data/lica-benchmarks-dataset/benchmarks/svg \
-    --dataset-root data/lica-benchmarks-dataset --batch-submit
+    --provider gemini --dataset-root data/lica-benchmarks-dataset --batch-submit
 
 python scripts/run_benchmarks.py --collect jobs/job_20260316_120000_gemini.json
 ```

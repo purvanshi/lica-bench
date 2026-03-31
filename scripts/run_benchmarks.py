@@ -1,58 +1,29 @@
 #!/usr/bin/env python3
-"""Unified benchmark runner.
+"""Unified benchmark runner. Default task dirs: ``benchmark_data_paths`` + ``--dataset-root``.
 
 Usage:
-    # Pipeline check on downloaded Lica data (no API keys; stub predictions)
+    # Stub smoke test (no API keys)
     python scripts/run_benchmarks.py --stub-model --benchmarks layout-4 layout-5 \\
-        --data data/lica-benchmarks-dataset/benchmarks/layout \\
         --dataset-root data/lica-benchmarks-dataset --n 5
 
-    # Run benchmarks (most domains: --data …/benchmarks/<domain>/…)
+    # API run (shipped Lica layout)
     python scripts/run_benchmarks.py --benchmarks svg-1 \\
         --provider gemini --credentials auth/google-cloud-key.json \\
-        --data data/lica-benchmarks-dataset/benchmarks/svg \\
         --dataset-root data/lica-benchmarks-dataset
 
-    python scripts/run_benchmarks.py --benchmarks category-1 \\
-        --provider gemini \\
-        --data data/lica-benchmarks-dataset/benchmarks/category/CategoryClassification \\
-        --dataset-root data/lica-benchmarks-dataset
-
-    # Local vLLM model with sampling params
-    python scripts/run_benchmarks.py --benchmarks svg-6 \\
-        --provider vllm --model-id Qwen/Qwen3-8B \\
-        --top-k 20 --top-p 0.8
-
-    # Local diffusion model
-    python scripts/run_benchmarks.py --benchmarks image-1 \\
-        --provider diffusion --model-id black-forest-labs/FLUX.1-schnell
-
-    # OpenAI image baseline (layout-1 intent-to-layout generation)
+    # Custom data layout (override)
     python scripts/run_benchmarks.py --benchmarks layout-1 \\
         --provider openai_image --model-id gpt-image-1.5 \\
-        --data path/to/layout_data --n 200 \\
-        -o outputs/layout2_openai_image_baseline.json
-
-    # Multi-model comparison in one run (same benchmark + data)
-    python scripts/run_benchmarks.py --benchmarks layout-1 \\
-        --multi-models openai_image:gpt-image-1.5 nano=gemini:gemini-3.1-flash-image-preview \\
-        --credentials /path/to/credentials.json \\
-        --data path/to/layout_data --n 200 \\
-        -o outputs/layout2_multimodel_baseline.json
+        --data /path/to/custom/layout2_folder --dataset-root data/lica-benchmarks-dataset \\
+        --n 200 -o outputs/baseline.json
 
     # Batch submit (~50% cheaper, fire-and-forget)
     python scripts/run_benchmarks.py --batch-submit --benchmarks svg-1 \\
         --provider gemini --credentials /path/to/credentials.json \\
-        --data data/lica-benchmarks-dataset/benchmarks/svg \\
         --dataset-root data/lica-benchmarks-dataset
 
     # Collect results from a previous submit
     python scripts/run_benchmarks.py --collect jobs/job_manifest.json
-
-    # Save report (format inferred from extension: .json or .csv)
-    python scripts/run_benchmarks.py --stub-model --benchmarks layout-4 \\
-        --data data/lica-benchmarks-dataset/benchmarks/layout \\
-        --dataset-root data/lica-benchmarks-dataset -o results.csv
 
     # List all benchmarks
     python scripts/run_benchmarks.py --list
@@ -87,6 +58,21 @@ except ModuleNotFoundError as exc:
     raise SystemExit(1) from exc
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _resolve_run_data_dir(
+    benchmark_id: str,
+    data_override: str | None,
+    dataset_root: str | None,
+) -> str:
+    if data_override:
+        return data_override
+    if not dataset_root:
+        raise ValueError("Need --dataset-root or --data.")
+    from design_benchmarks.benchmark_data_paths import resolve_benchmark_data_dir
+
+    return str(resolve_benchmark_data_dir(benchmark_id, dataset_root))
+
 
 PROVIDER_TO_REGISTRY = {
     "gemini": "google",
@@ -260,14 +246,14 @@ def cmd_run(
 
     for bid in benchmark_ids:
         bench = registry.get(bid)
-
-        data_path = data_override
-        if not data_path:
-            print(f"\n[{bid}] SKIP — no data (pass --data)")
+        print(f"\n[{bid}] {bench.meta.name}")
+        try:
+            data_path = _resolve_run_data_dir(bid, data_override, dataset_root)
+        except (KeyError, FileNotFoundError, ValueError) as exc:
+            print(f"  FAILED: {exc}")
             all_ok = False
             continue
 
-        print(f"\n[{bid}] {bench.meta.name}")
         print(f"  data: {data_path}")
         t0 = time.time()
         try:
@@ -344,14 +330,16 @@ def cmd_submit(
 
     batch_runner = make_batch_runner(args.provider, **batch_kwargs)
 
+    data_dir = _resolve_run_data_dir(benchmark_id, args.data, args.dataset_root)
+
     print(f"\n[{benchmark_id}] {registry.get(benchmark_id).meta.name}")
-    print(f"  data: {args.data}")
+    print(f"  data: {data_dir}")
     print(f"  provider: {args.provider} / {model_id}")
 
     manifest_data = runner.submit(
         benchmark_id,
         batch_runner,
-        data_dir=args.data,
+        data_dir=data_dir,
         dataset_root=args.dataset_root,
         n=args.n,
     )
@@ -467,11 +455,7 @@ def main() -> None:
     parser.add_argument(
         "--stub-model",
         action="store_true",
-        help=(
-            "Run with the built-in stub model (no API keys). "
-            "Use with --data pointing at benchmark inputs inside the Lica download "
-            "(e.g. data/lica-benchmarks-dataset/benchmarks/layout)."
-        ),
+        help="Run with built-in stub model (no API keys).",
     )
     parser.add_argument("--provider", choices=list(PROVIDER_TO_REGISTRY.keys()))
     parser.add_argument("--model-id", default=None)
@@ -571,15 +555,15 @@ def main() -> None:
 
     # Run settings
     parser.add_argument(
-        "--data", default=None, help="Path to task-specific data directory"
+        "--data",
+        default=None,
+        help="Task data directory (default: under --dataset-root per benchmark_data_paths)",
     )
     parser.add_argument(
         "--dataset-root",
         required=False,
         default=None,
-        help="Top-level dataset directory (e.g. data/lica-benchmarks-dataset). "
-        "Paths stored in data files (CSV image_path, JSON data_root) are "
-        "resolved against this root. Required for 'run' and 'batch-submit'.",
+        help="Lica bundle root (lica-data/ + benchmarks/). Required for runs.",
     )
     parser.add_argument("--n", type=int, default=None)
     parser.add_argument(
@@ -652,10 +636,13 @@ def main() -> None:
             )
         if not args.benchmarks or len(args.benchmarks) != 1:
             parser.error("--batch-submit requires exactly one --benchmarks ID")
-        if not args.data:
-            parser.error("--data required")
         if not args.dataset_root:
             parser.error("--dataset-root required")
+        if not args.data:
+            try:
+                _resolve_run_data_dir(args.benchmarks[0], None, args.dataset_root)
+            except (KeyError, FileNotFoundError, ValueError) as exc:
+                parser.error(str(exc))
         registry = BenchmarkRegistry()
         registry.discover()
         sys.exit(0 if cmd_submit(registry, args.benchmarks[0], args) else 1)

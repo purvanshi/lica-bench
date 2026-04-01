@@ -6,7 +6,7 @@ Benchmarks use the [Lica dataset](https://github.com/purvanshi/lica-dataset) (1,
 
 ## Benchmarks
 
-Each task is one of two types: **understanding** (answer a question or edit an artifact), or **generation** (produce a new artifact). 46 tasks span seven domains across 40 benchmarks:
+Each task is one of two types: **understanding** (answer a question or edit an artifact), or **generation** (produce a new artifact). 45 tasks span seven domains across 39 benchmarks:
 
 | Domain | Tasks | Benchmarks | Description |
 |--------|------:|----------:|-------------|
@@ -14,7 +14,7 @@ Each task is one of two types: **understanding** (answer a question or edit an a
 | layout | 8 | 8 | Spatial reasoning over design canvases (aspect ratio, element counting, component type and detection), layout generation (intent-to-layout, partial completion, aspect-ratio adaptation), and layer-aware object insertion (`layout-8`, reference- or description-guided per sample) |
 | lottie | 2 | 2 | Lottie animation generation from text and image |
 | svg | 8 | 8 | SVG reasoning and editing (perceptual and semantic Q/A, bug fixing, optimization, style editing) and generation (text-to-SVG, image-to-SVG, combined input) |
-| template | 6 | 6 | Template matching, retrieval, clustering, and generation (style completion, color transfer, asset swap) |
+| template | 5 | 5 | Template matching, retrieval, clustering, and generation (style completion, color transfer) |
 | temporal | 8 | 6 | Keyframe ordering; motion type classification; **video duration**, **component duration**, and **start-time** estimation (`temporal-3`, with motion type / speed / direction in the same benchmark); generation (animation parameters, motion trajectory, short-form video) |
 | typography | 12 | 8 | Font family, color, size / weight / alignment / letter spacing / line height* (single benchmark), style ranges, curvature, rotation, and generation (styled text element, styled text rendering to layout) |
 
@@ -139,7 +139,7 @@ lica-bench/
 │   │   ├── layout.py       #   layout-1 … layout-8
 │   │   ├── lottie.py       #   lottie-1, lottie-2
 │   │   ├── svg.py          #   svg-1 … svg-8
-│   │   ├── template.py     #   template-1 … template-6
+│   │   ├── template.py     #   template-1 … template-5
 │   │   ├── temporal.py     #   temporal-1 … temporal-6
 │   │   └── typography.py   #   typography-1 … typography-8
 │   ├── models/             # Provider wrappers (OpenAI, Anthropic, Gemini, HF, vLLM)

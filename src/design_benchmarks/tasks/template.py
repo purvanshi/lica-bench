@@ -1,6 +1,6 @@
-"""Template benchmarks (template-1 through template-6).
+"""Template benchmarks (template-1 through template-5).
 
-All six tasks are implemented.
+All benchmarks in this module are implemented.
 
 Data contract: each task reads ``{task-id}.json`` from the ``--data`` directory.
 Template JSON files may contain a ``data_root`` key pointing to the Lica dataset
@@ -24,11 +24,7 @@ from design_benchmarks.utils.template_layout_paths import (
     parse_data_root,
     resolve_layout_paths,
 )
-from design_benchmarks.utils.text_helpers import (
-    normalized_edit_distance,
-    parse_json_from_text,
-    strip_thinking,
-)
+from design_benchmarks.utils.text_helpers import parse_json_from_text, strip_thinking
 
 # ---------------------------------------------------------------------------
 # Ranking metrics
@@ -363,7 +359,7 @@ def _evaluate_template_generation(
                 gt_sizes = _extract_font_sizes(gt_layout)
                 if pred_sizes and gt_sizes:
                     _acc("font_size_cosine", _cosine_sim(pred_sizes, gt_sizes))
-                if task in ("color_transfer", "asset_swap"):
+                if task == "color_transfer":
                     pp = _extract_positions(pred)
                     gp = _extract_positions(gt_layout)
                     if pp and gp:
@@ -376,8 +372,6 @@ def _evaluate_template_generation(
             if has_components:
                 if task == "color_transfer":
                     _compute_color_transfer(pred, gt_bundle, gt_layout, _acc)
-                elif task == "asset_swap" and gt_layout:
-                    _compute_asset_swap(pred, gt_layout, _acc)
                 elif task == "style_completion" and gt_layout:
                     _compute_style_completion(pred, gt_layout, _acc)
                     pred_bg = _parse_color_rgb(pred.get("background", ""))
@@ -430,26 +424,6 @@ def _compute_color_transfer(
         pred_bg = _parse_color_rgb(pred.get("background", ""))
         if tgt_bg and pred_bg:
             acc("bg_color_distance", _ciede2000_distance(pred_bg, tgt_bg))
-
-
-def _compute_asset_swap(pred: dict, gt_layout: dict, acc: Any) -> None:
-    gt_comps = gt_layout.get("components", [])
-    pred_comps = pred.get("components", [])
-    text_dists: list = []
-    img_repl = img_total = 0
-    for pc, gc in zip(pred_comps, gt_comps):
-        if gc.get("type") == "TEXT":
-            pt, gt_t = pc.get("text", ""), gc.get("text", "")
-            if pt and gt_t:
-                text_dists.append(normalized_edit_distance(pt, gt_t))
-        elif gc.get("type") == "IMAGE" and gc.get("src"):
-            img_total += 1
-            if pc.get("src") and pc.get("src") != gc.get("src"):
-                img_repl += 1
-    if text_dists:
-        acc("contentnormalized_edit_distance", sum(text_dists) / len(text_dists))
-    if img_total > 0:
-        acc("asset_replacement_rate", img_repl / img_total)
 
 
 def _compute_style_completion(pred: dict, gt_layout: dict, acc: Any) -> None:
@@ -820,7 +794,7 @@ class LayoutClustering(BaseBenchmark):
 
 
 # ===========================================================================
-# Generation tasks — template-4, template-5, template-6
+# Generation tasks — template-4, template-5
 # ===========================================================================
 
 
@@ -971,71 +945,3 @@ class ColorTransfer(BaseBenchmark):
 
     def evaluate(self, predictions, ground_truth):
         return _evaluate_template_generation(predictions, ground_truth, "color_transfer")
-
-
-@benchmark
-class AssetSwap(BaseBenchmark):
-    """template-6 — Replace content assets while preserving layout style."""
-
-    pipeline_implemented = True
-
-    PROMPT = (
-        "You are a design system assistant. Given a source layout and replacement "
-        "assets (new text and image content), update the layout to use the new content "
-        "while preserving the original layout structure and visual style. "
-        "Return ONLY a valid JSON layout object."
-    )
-
-    meta = BenchmarkMeta(
-        id="template-6",
-        name="Asset Swap",
-        task_type=TaskType.GENERATION,
-        domain="template",
-        description="Replace content assets while preserving layout structure and style",
-        input_spec="Source layout + replacement text/image assets",
-        output_spec="Updated JSON layout object",
-        metrics=["json_valid", "contentnormalized_edit_distance", "asset_replacement_rate", "position_fidelity", "area_fidelity"],
-    )
-
-    def load_data(self, data_dir, *, n=None, dataset_root: Union[str, Path]):
-        data, data_root = load_task_json(data_dir, self.meta.id)
-        data_root_resolved = parse_data_root(data.get("data_root"), dataset_root)
-        samples: list = []
-        for i, prob in enumerate(data.get("problems", [])):
-            src_img = ""
-            if data_root_resolved and prob.get("source_image_path"):
-                src_img = str(data_root_resolved / prob["source_image_path"])
-            else:
-                src_img = prob.get("source_image_path", "")
-            samples.append({
-                "sample_id": f"swap_{i:03d}",
-                "ground_truth": prob.get("ground_truth", {}),
-                "source_layout": prob.get("source_layout", {}),
-                "replacement_assets": prob.get("replacement_assets", {}),
-                "source_image_path": src_img,
-            })
-            if n is not None and len(samples) >= n:
-                break
-        return samples
-
-    def build_model_input(self, sample, *, modality=None):
-        from design_benchmarks.models.base import ModelInput
-
-        src = json.dumps(sample["source_layout"], indent=2)
-        repl = json.dumps(sample["replacement_assets"], indent=2)
-        images: list = []
-        ip = sample.get("source_image_path", "")
-        if ip and Path(ip).is_file():
-            images.append(ip)
-        return ModelInput(text=f"{self.PROMPT}\n\nSource layout:\n{src}\n\nReplacement assets:\n{repl}", images=images)
-
-    def parse_model_output(self, output):
-        parsed = parse_json_from_text(output.text)
-        if isinstance(parsed, list) and parsed:
-            return parsed[0] if isinstance(parsed[0], dict) else {}
-        if isinstance(parsed, dict):
-            return parsed
-        return {}
-
-    def evaluate(self, predictions, ground_truth):
-        return _evaluate_template_generation(predictions, ground_truth, "asset_swap")

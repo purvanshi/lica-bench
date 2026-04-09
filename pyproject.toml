@@ -32,6 +32,10 @@ svg-metrics = [
     "transformers",
     "lpips>=0.1",
 ]
+lottie-metrics = [
+    "lica-bench[metrics]",
+    "rlottie-python>=1.3",
+]
 layout-metrics = [
     "torch",
     "transformers",

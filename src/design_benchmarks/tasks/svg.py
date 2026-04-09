@@ -7,6 +7,7 @@ The JSON schema varies by task — see ``load_data`` in each class.
 from __future__ import annotations
 
 import io
+import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Union
@@ -17,6 +18,10 @@ from design_benchmarks.utils.text_helpers import (
     normalized_edit_distance,
     strip_thinking,
 )
+
+logger = logging.getLogger(__name__)
+
+_svg_validity_warned = False
 
 
 def _strip_svg_wrapper(text: str) -> str:
@@ -163,6 +168,13 @@ def _clip_text_image_score(text: str, svg_code: str, size: int = 256) -> float:
 
 
 def _svg_validity(svg_code: str) -> float:
+    """Check whether *svg_code* can be rasterised by ``cairosvg``.
+
+    Returns ``1.0`` (valid), ``0.0`` (invalid or missing ``<svg>`` tag).
+    Logs a one-time warning when ``cairosvg`` or the system ``libcairo``
+    library is unavailable so the caller knows the metric is skipped.
+    """
+    global _svg_validity_warned  # noqa: PLW0603
     if "<svg" not in svg_code:
         return 0.0
     try:
@@ -170,6 +182,22 @@ def _svg_validity(svg_code: str) -> float:
 
         cairosvg.svg2png(bytestring=svg_code.encode("utf-8"), output_width=64, output_height=64)
         return 1.0
+    except ImportError:
+        if not _svg_validity_warned:
+            logger.warning(
+                "svg_validity: cairosvg is not installed — install "
+                "lica-bench[metrics] and the libcairo system library."
+            )
+            _svg_validity_warned = True
+        return 0.0
+    except OSError:
+        if not _svg_validity_warned:
+            logger.warning(
+                "svg_validity: cairosvg found but the libcairo system "
+                "library is missing (e.g. apt-get install libcairo2-dev)."
+            )
+            _svg_validity_warned = True
+        return 0.0
     except Exception:
         return 0.0
 

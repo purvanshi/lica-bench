@@ -130,6 +130,7 @@ Available extras:
 |-------|----------|
 | `metrics` | scipy, sklearn, scikit-image, Pillow, cairosvg |
 | `svg-metrics` | metrics + torch, transformers, lpips |
+| `lottie-metrics` | metrics + rlottie-python |
 | `layout-metrics` | torch, transformers, pyiqa, hpsv2, hpsv3, dreamsim, image-reward |
 
 See `pyproject.toml` `[project.optional-dependencies]` for the full list.

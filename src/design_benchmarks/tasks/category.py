@@ -8,12 +8,15 @@ Data contract: ``samples.csv`` in the task directory under
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Dict, List, Union
 
 from design_benchmarks.base import BaseBenchmark, BenchmarkMeta, TaskType, benchmark
 from design_benchmarks.utils.data_helpers import build_vision_input, load_csv_samples
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Shared helpers — category normalisation & matching
@@ -156,7 +159,7 @@ class UserIntentPrediction(BaseBenchmark):
         description="Predict the user intent that motivated the design",
         input_spec="Rendered layout image",
         output_spec="Free-text user intent",
-        metrics=["bertscore_f1", "llama_cosine_similarity"],
+        metrics=["bertscore_f1", "semantic_cosine_similarity"],
     )
 
     def load_data(self, data_dir, *, n=None, dataset_root: Union[str, Path]):
@@ -182,39 +185,37 @@ class UserIntentPrediction(BaseBenchmark):
             import torch
             from transformers import AutoModel, AutoTokenizer
 
-            model_id = "meta-llama/Llama-3.2-1B"
+            model_id = "sentence-transformers/all-MiniLM-L6-v2"
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            tokenizer = AutoTokenizer.from_pretrained(model_id)
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
-            model = AutoModel.from_pretrained(
-                model_id, dtype=torch.float16
-            ).to(device).eval()
+            tok = AutoTokenizer.from_pretrained(model_id)
+            embed_model = AutoModel.from_pretrained(model_id).to(device).eval()
 
-            def _embed(texts: List[str]) -> "torch.Tensor":
-                all_embs = []
-                for start in range(0, len(texts), 8):
-                    batch = texts[start : start + 8]
-                    enc = tokenizer(
-                        batch, padding=True, truncation=True,
-                        max_length=512, return_tensors="pt",
-                    ).to(device)
-                    with torch.no_grad():
-                        hidden = model(**enc).last_hidden_state
-                    mask = enc["attention_mask"].unsqueeze(-1).float()
-                    pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-9)
-                    all_embs.append(pooled)
-                return torch.cat(all_embs, dim=0)
-
-            pred_embs = torch.nn.functional.normalize(_embed(preds), dim=-1)
-            ref_embs = torch.nn.functional.normalize(_embed(refs), dim=-1)
+            all_texts = preds + refs
+            all_embs: list = []
+            for start in range(0, len(all_texts), 8):
+                batch = all_texts[start : start + 8]
+                enc = tok(
+                    batch, padding=True, truncation=True,
+                    max_length=256, return_tensors="pt",
+                ).to(device)
+                with torch.no_grad():
+                    hidden = embed_model(**enc).last_hidden_state
+                mask = enc["attention_mask"].unsqueeze(-1).float()
+                pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-9)
+                all_embs.append(pooled)
+            embs = torch.nn.functional.normalize(torch.cat(all_embs, dim=0), dim=-1)
+            pred_embs = embs[: len(preds)]
+            ref_embs = embs[len(preds) :]
             cosines = (pred_embs * ref_embs).sum(dim=-1)
-            scores["llama_cosine_similarity"] = float(cosines.mean())
+            scores["semantic_cosine_similarity"] = float(cosines.mean())
 
-            del model
+            del embed_model
             torch.cuda.empty_cache()
         except ImportError:
-            pass
+            logger.warning(
+                "semantic_cosine_similarity: torch/transformers not installed — "
+                "install lica-bench[svg-metrics] for this metric."
+            )
 
         return scores
 

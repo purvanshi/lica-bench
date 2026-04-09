@@ -9,13 +9,16 @@ The JSON is an array of objects with ``question``, ``image``, and ``answer`` key
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from design_benchmarks.base import BaseBenchmark, BenchmarkMeta, TaskType, benchmark
 from design_benchmarks.utils.data_helpers import load_task_json
 from design_benchmarks.utils.text_helpers import strip_thinking
+
+logger = logging.getLogger(__name__)
 
 # -- Lottie JSON helpers ----------------------------------------------------
 
@@ -61,11 +64,104 @@ def _lottie_structural_similarity(pred: dict, gt: dict) -> float:
     return sum(scores) / len(scores) if scores else 0.0
 
 
+def _render_lottie_frame(
+    lottie_data: dict, frame_idx: int = 0, size: int = 256,
+) -> Optional[Any]:
+    """Render a single Lottie frame to a PIL RGB Image.
+
+    Returns ``None`` when ``rlottie-python`` or ``Pillow`` is unavailable.
+    """
+    try:
+        from PIL import Image
+        from rlottie_python import LottieAnimation
+    except ImportError:
+        return None
+
+    try:
+        anim = LottieAnimation.from_data(data=json.dumps(lottie_data))
+        total = anim.lottie_animation_get_totalframe()
+        frame_idx = max(0, min(frame_idx, total - 1))
+        buf = anim.lottie_animation_render(frame_num=frame_idx, width=size, height=size)
+        img = Image.frombuffer("RGBA", (size, size), buf, "raw", "BGRA", 0, 1)
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[3])
+        return bg
+    except Exception:
+        return None
+
+
+_NUM_SAMPLE_FRAMES = 5
+
+
+def _frame_mse(pred_data: dict, gt_data: dict, size: int = 256) -> Optional[float]:
+    """Mean-squared error averaged over sampled frames. Lower is better."""
+    try:
+        import numpy as np
+        from rlottie_python import LottieAnimation
+    except ImportError:
+        return None
+
+    try:
+        pred_anim = LottieAnimation.from_data(data=json.dumps(pred_data))
+        gt_anim = LottieAnimation.from_data(data=json.dumps(gt_data))
+        pred_total = pred_anim.lottie_animation_get_totalframe()
+        gt_total = gt_anim.lottie_animation_get_totalframe()
+        total = max(pred_total, gt_total, 1)
+        indices = [int(i * (total - 1) / max(_NUM_SAMPLE_FRAMES - 1, 1)) for i in range(_NUM_SAMPLE_FRAMES)]
+        mse_sum = 0.0
+        for idx in indices:
+            pred_img = _render_lottie_frame(pred_data, min(idx, pred_total - 1), size)
+            gt_img = _render_lottie_frame(gt_data, min(idx, gt_total - 1), size)
+            if pred_img is None or gt_img is None:
+                mse_sum += 1.0
+                continue
+            diff = np.array(pred_img, dtype=np.float64) - np.array(gt_img, dtype=np.float64)
+            mse_sum += float(np.mean(diff ** 2)) / 65025.0
+        return mse_sum / len(indices)
+    except Exception:
+        return None
+
+
+def _frame_ssim(pred_data: dict, gt_data: dict, size: int = 256) -> Optional[float]:
+    """SSIM averaged over sampled frames. Higher is better."""
+    try:
+        import numpy as np
+        from rlottie_python import LottieAnimation
+        from skimage.metrics import structural_similarity
+    except ImportError:
+        return None
+
+    try:
+        pred_anim = LottieAnimation.from_data(data=json.dumps(pred_data))
+        gt_anim = LottieAnimation.from_data(data=json.dumps(gt_data))
+        pred_total = pred_anim.lottie_animation_get_totalframe()
+        gt_total = gt_anim.lottie_animation_get_totalframe()
+        total = max(pred_total, gt_total, 1)
+        indices = [int(i * (total - 1) / max(_NUM_SAMPLE_FRAMES - 1, 1)) for i in range(_NUM_SAMPLE_FRAMES)]
+        ssim_sum = 0.0
+        for idx in indices:
+            pred_img = _render_lottie_frame(pred_data, min(idx, pred_total - 1), size)
+            gt_img = _render_lottie_frame(gt_data, min(idx, gt_total - 1), size)
+            if pred_img is None or gt_img is None:
+                continue
+            ssim_sum += float(structural_similarity(
+                np.array(pred_img), np.array(gt_img), channel_axis=2, data_range=255,
+            ))
+        return ssim_sum / len(indices)
+    except Exception:
+        return None
+
+
 def _evaluate_lottie(
     predictions: List[str], ground_truth: List[Dict[str, str]],
 ) -> Dict[str, float]:
     n = max(len(predictions), 1)
-    val_s = struct_s = cl_s = mse_s = ssim_s = clip_s = 0.0
+    val_s = struct_s = cl_s = 0.0
+    mse_vals: List[Optional[float]] = []
+    ssim_vals: List[Optional[float]] = []
+
+    _warned_render = False
+
     for pred_text, gt_dict in zip(predictions, ground_truth):
         gt_text = gt_dict.get("lottie_json", "")
         cl_s += len(pred_text.encode("utf-8"))
@@ -75,16 +171,34 @@ def _evaluate_lottie(
         val_s += 1.0 if valid else 0.0
         if valid and gt_data:
             struct_s += _lottie_structural_similarity(pred_data, gt_data)
-        mse_s += 1.0
-        ssim_s += 0.0
-    return {
-        "frame_mse": mse_s / n,
-        "frame_ssim": ssim_s / n,
-        "clip_score": clip_s / n,
+            mse_val = _frame_mse(pred_data, gt_data)
+            ssim_val = _frame_ssim(pred_data, gt_data)
+            if mse_val is None and not _warned_render:
+                logger.warning(
+                    "Lottie frame metrics unavailable — install "
+                    "lica-bench[lottie-metrics] for frame_mse/frame_ssim."
+                )
+                _warned_render = True
+            mse_vals.append(mse_val)
+            ssim_vals.append(ssim_val)
+        else:
+            mse_vals.append(None)
+            ssim_vals.append(None)
+
+    real_mse = [v for v in mse_vals if v is not None]
+    real_ssim = [v for v in ssim_vals if v is not None]
+
+    scores: Dict[str, float] = {
         "lottie_validity": val_s / n,
         "structural_similarity": struct_s / n,
         "code_length": cl_s / n,
     }
+    if real_mse:
+        scores["frame_mse"] = sum(real_mse) / len(real_mse)
+    if real_ssim:
+        scores["frame_ssim"] = sum(real_ssim) / len(real_ssim)
+
+    return scores
 
 
 # ===========================================================================

@@ -99,9 +99,10 @@ Some tasks need optional dependencies for full metric computation. Install as ne
 ```bash
 pip install -e ".[metrics]"          # sklearn, cairosvg, Pillow (most tasks)
 pip install -e ".[svg-metrics]"      # metrics + torch/transformers/lpips (SVG generation)
+pip install -e ".[lottie-metrics]"   # metrics + rlottie-python (Lottie frame eval)
 pip install -e ".[layout-metrics]"   # full stack on Linux with Python < 3.12
 ```
 
-Tasks gracefully return 0.0 for metrics whose dependencies are missing.
+Metrics whose dependencies are unavailable are omitted from the output (with a logged warning).
 
 See the root [README.md](../README.md) for benchmark counts, status, and dataset layout. See [docs/CONTRIBUTING.md](../docs/CONTRIBUTING.md) for adding new tasks.

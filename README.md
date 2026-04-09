@@ -38,6 +38,7 @@ pip install -e ".[openai]"           # OpenAI provider
 pip install -e ".[gemini]"           # Gemini provider
 pip install -e ".[anthropic]"        # Anthropic provider
 pip install -e ".[svg-metrics]"      # Full SVG eval (metrics + LPIPS, CLIP)
+pip install -e ".[lottie-metrics]"   # Lottie frame-level eval (rlottie-python)
 pip install -e ".[layout-metrics]"   # Layout/image metrics (Linux + Python<3.12 recommended)
 pip install -e ".[dev]"              # ruff linter
 ```
@@ -198,7 +199,7 @@ See **[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)** for:
 
 ## Limitations
 
-- Some metrics (LPIPS, CLIP score, SSIM, CIEDE2000) need heavier extras (`.[svg-metrics]`, `.[layout-metrics]`). The full `.[layout-metrics]` stack is enabled on Linux with Python < 3.12. Tasks return `0.0` for metrics whose dependencies are unavailable.
+- Some metrics (LPIPS, CLIP score, SSIM, CIEDE2000) need heavier extras (`.[svg-metrics]`, `.[lottie-metrics]`, `.[layout-metrics]`). The full `.[layout-metrics]` stack is enabled on Linux with Python < 3.12. Metrics whose dependencies are unavailable are omitted from the output (with a logged warning).
 - **`--provider`** picks which backend runs the model (OpenAI, Gemini, Anthropic, etc.); **`--model-id`** is only the catalog string for *that* backend (it does not select the provider). If you omit **`--model-id`**, the default for the chosen provider is used (see `DEFAULT_MODEL_IDS` in `scripts/run_benchmarks.py`). With **`--multi-models`**, each entry is **`provider:model_id`** so both are explicit. Use a **`--model-id`** your account actually exposes (README examples may name newer IDs such as `gpt-5.4`).
 
 ## Models
@@ -219,6 +220,7 @@ See **[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)** for:
 |-------|----------|---------|
 | `.[metrics]` | scipy, sklearn, scikit-image, Pillow, cairosvg | All implemented tasks (clustering, color, SVG rendering) |
 | `.[svg-metrics]` | metrics + torch, transformers, lpips | SVG generation (LPIPS, CLIP score) |
+| `.[lottie-metrics]` | metrics + rlottie-python | Lottie generation (frame MSE, frame SSIM) |
 | `.[layout-metrics]` | torch, transformers (+ Linux/Python<3.12: pyiqa, hpsv2, hpsv3, dreamsim, image-reward) | Layout / image generation (FID, HPSv2/v3, DreamSim) |
 
 ## Dataset

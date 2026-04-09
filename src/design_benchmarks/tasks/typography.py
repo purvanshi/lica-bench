@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import colorsys
 import csv
+import hashlib
 import html
 import io
 import json
@@ -33,6 +34,7 @@ from design_benchmarks.utils.data_helpers import build_vision_input, load_csv_sa
 from design_benchmarks.utils.text_helpers import extract_json_obj
 
 logger = logging.getLogger(__name__)
+Box = Tuple[int, int, int, int]
 
 # ---------------------------------------------------------------------------
 # Shared helpers — color metrics
@@ -541,6 +543,11 @@ class StyledTextGeneration(BaseBenchmark):
             "ocr_accuracy_alnum",
             "cer_alnum",
             "edit_distance_alnum",
+            "bbox_iou",
+            "bbox_f1",
+            "bbox_precision",
+            "bbox_recall",
+            "bbox_detection_rate",
             "font_family_top1_accuracy",
             "font_family_top5_accuracy",
             "font_size_mae",
@@ -570,6 +577,12 @@ class StyledTextGeneration(BaseBenchmark):
     ELEMENT_MANIFEST_CSV = "g10_text_element_manifest.csv"
     INPAINT_MANIFEST_JSON = "g10_text_inpaint_manifest.json"
     INPAINT_MANIFEST_CSV = "g10_text_inpaint_manifest.csv"
+    BBOX_DETECTOR_MODEL_ID_ENV = "DESIGN_BENCHMARKS_G10_BBOX_DETECTOR_MODEL_ID"
+    BBOX_DETECTOR_DEFAULT_MODEL_ID = "gpt-5.4"
+    _bbox_detector_model: Any = None
+    _bbox_detector_model_id: str = ""
+    _bbox_detector_disabled: bool = False
+    _bbox_detector_cache: Dict[str, Optional[Box]] = {}
 
     def load_data(
         self,
@@ -603,6 +616,7 @@ class StyledTextGeneration(BaseBenchmark):
                 continue
 
             style_spec = row.get("style_spec") if isinstance(row.get("style_spec"), dict) else {}
+            bbox_xywh = self._normalize_bbox_xywh(row.get("bbox_xywh_on_layout"))
             sample_id = str(row.get("sample_id") or f"g10_element_{i:04d}")
             row_prompt = str(row.get("prompt") or "").strip()
             if self._resolve_use_manifest_prompt() and row_prompt:
@@ -618,6 +632,7 @@ class StyledTextGeneration(BaseBenchmark):
                 "mask": mask_path,
                 "input_image": input_path,
                 "evaluation_mode": "text_style_only",
+                "target_bbox_xywh_on_layout": bbox_xywh,
             }
             samples.append(
                 {
@@ -781,6 +796,11 @@ class StyledTextGeneration(BaseBenchmark):
         lpips_scores: List[float] = []
         ssim_scores: List[float] = []
         style_pred_rate_scores: List[float] = []
+        bbox_iou_scores: List[float] = []
+        bbox_f1_scores: List[float] = []
+        bbox_precision_scores: List[float] = []
+        bbox_recall_scores: List[float] = []
+        bbox_detection_scores: List[float] = []
 
         evaluated = 0
         has_reconstruction_metrics = False
@@ -852,6 +872,32 @@ class StyledTextGeneration(BaseBenchmark):
                 self._append_if_finite(ocr_acc_alnum_scores, ocr["ocr_accuracy_alnum"])
                 self._append_if_finite(edit_distance_alnum_scores, ocr["edit_distance_alnum"])
 
+                mask = self._to_gray_mask(gt.get("mask"), pred_img.shape[:2])
+                gt_bbox = self._resolve_target_bbox_xyxy(
+                    gt=gt,
+                    image_hw=pred_img.shape[:2],
+                )
+                if gt_bbox is not None:
+                    pred_bbox = self._detect_text_bbox_llm(
+                        image=pred_img,
+                        expected_text=str(gt.get("text", "")),
+                        mask_bbox=self._mask_bbox(mask),
+                        sample_id=str(gt.get("sample_id", "")),
+                    )
+                    self._append_if_finite(
+                        bbox_detection_scores,
+                        1.0 if pred_bbox is not None else 0.0,
+                    )
+                    if pred_bbox is not None:
+                        self._append_if_finite(
+                            bbox_iou_scores,
+                            self._box_iou(pred_bbox, gt_bbox),
+                        )
+                        precision, recall, f1 = self._box_precision_recall_f1(pred_bbox, gt_bbox)
+                        self._append_if_finite(bbox_precision_scores, precision)
+                        self._append_if_finite(bbox_recall_scores, recall)
+                        self._append_if_finite(bbox_f1_scores, f1)
+
                 style_pred = self._predict_style_proxy(pred_img)
                 _collect_style_scores(style_pred, gt.get("style_spec") or {})
                 evaluated += 1
@@ -906,6 +952,11 @@ class StyledTextGeneration(BaseBenchmark):
             "ocr_accuracy_alnum": self._mean_or_nan(ocr_acc_alnum_scores),
             "cer_alnum": self._mean_or_nan(cer_alnum_scores),
             "edit_distance_alnum": self._mean_or_nan(edit_distance_alnum_scores),
+            "bbox_iou": self._mean_or_nan(bbox_iou_scores),
+            "bbox_f1": self._mean_or_nan(bbox_f1_scores),
+            "bbox_precision": self._mean_or_nan(bbox_precision_scores),
+            "bbox_recall": self._mean_or_nan(bbox_recall_scores),
+            "bbox_detection_rate": self._mean_or_nan(bbox_detection_scores),
             "font_family_top1_accuracy": self._mean_or_nan(font_top1_scores),
             "font_family_top5_accuracy": self._mean_or_nan(font_top5_scores),
             "font_size_mae": self._mean_or_nan(font_size_mae_scores),
@@ -1858,19 +1909,26 @@ class StyledTextGeneration(BaseBenchmark):
     def _normalize_gt(cls, raw: Any) -> Dict[str, Any]:
         if not isinstance(raw, dict):
             return {
+                "sample_id": "",
                 "text": "",
                 "style_spec": {},
                 "ground_truth_image": "",
                 "mask": "",
                 "evaluation_mode": "inpaint_reconstruction",
+                "target_bbox_xywh_on_layout": None,
             }
+        bbox_xywh = cls._normalize_bbox_xywh(
+            raw.get("target_bbox_xywh_on_layout", raw.get("bbox_xywh_on_layout")),
+        )
         return {
+            "sample_id": str(raw.get("sample_id") or ""),
             "text": cls._clean_text(raw.get("text")),
             "style_spec": raw.get("style_spec") if isinstance(raw.get("style_spec"), dict) else {},
             "ground_truth_image": str(raw.get("ground_truth_image") or ""),
             "mask": str(raw.get("mask") or ""),
             "input_image": str(raw.get("input_image") or ""),
             "evaluation_mode": str(raw.get("evaluation_mode") or "inpaint_reconstruction").strip().lower(),
+            "target_bbox_xywh_on_layout": bbox_xywh,
         }
 
     @staticmethod
@@ -1887,6 +1945,321 @@ class StyledTextGeneration(BaseBenchmark):
         if not values:
             return float("nan")
         return float(sum(values) / len(values))
+
+    @staticmethod
+    def _normalize_bbox_xywh(value: Any) -> Optional[List[float]]:
+        if not isinstance(value, (list, tuple)) or len(value) < 4:
+            return None
+        out: List[float] = []
+        for raw in value[:4]:
+            try:
+                out.append(float(raw))
+            except Exception:  # noqa: BLE001
+                return None
+        return out
+
+    @staticmethod
+    def _xywh_to_xyxy(x: float, y: float, w: float, h: float) -> Box:
+        return (
+            int(round(x)),
+            int(round(y)),
+            int(round(x + w)),
+            int(round(y + h)),
+        )
+
+    @staticmethod
+    def _clamp_box(box: Optional[Box], width: int, height: int) -> Optional[Box]:
+        if box is None:
+            return None
+        x1, y1, x2, y2 = box
+        x1 = max(0, min(width, int(x1)))
+        y1 = max(0, min(height, int(y1)))
+        x2 = max(0, min(width, int(x2)))
+        y2 = max(0, min(height, int(y2)))
+        if x2 <= x1 or y2 <= y1:
+            return None
+        return x1, y1, x2, y2
+
+    @staticmethod
+    def _box_area(box: Optional[Box]) -> float:
+        if box is None:
+            return 0.0
+        x1, y1, x2, y2 = box
+        return float(max(0, x2 - x1) * max(0, y2 - y1))
+
+    @classmethod
+    def _box_iou(cls, a: Optional[Box], b: Optional[Box]) -> float:
+        if a is None or b is None:
+            return 0.0
+        ax1, ay1, ax2, ay2 = a
+        bx1, by1, bx2, by2 = b
+        ix1 = max(ax1, bx1)
+        iy1 = max(ay1, by1)
+        ix2 = min(ax2, bx2)
+        iy2 = min(ay2, by2)
+        inter = cls._box_area((ix1, iy1, ix2, iy2))
+        union = cls._box_area(a) + cls._box_area(b) - inter
+        if union <= 0:
+            return 0.0
+        return float(inter / union)
+
+    @classmethod
+    def _box_precision_recall_f1(
+        cls,
+        pred: Optional[Box],
+        gt: Optional[Box],
+    ) -> Tuple[float, float, float]:
+        if pred is None or gt is None:
+            return 0.0, 0.0, 0.0
+        px1, py1, px2, py2 = pred
+        gx1, gy1, gx2, gy2 = gt
+        ix1 = max(px1, gx1)
+        iy1 = max(py1, gy1)
+        ix2 = min(px2, gx2)
+        iy2 = min(py2, gy2)
+        inter = cls._box_area((ix1, iy1, ix2, iy2))
+        pred_area = cls._box_area(pred)
+        gt_area = cls._box_area(gt)
+        precision = float(inter / pred_area) if pred_area > 0 else 0.0
+        recall = float(inter / gt_area) if gt_area > 0 else 0.0
+        if precision + recall <= 0:
+            return precision, recall, 0.0
+        f1 = 2.0 * precision * recall / (precision + recall)
+        return float(precision), float(recall), float(f1)
+
+    @staticmethod
+    def _mask_bbox(mask: Optional[np.ndarray]) -> Optional[Box]:
+        if mask is None:
+            return None
+        ys, xs = np.where(mask > 127)
+        if ys.size == 0 or xs.size == 0:
+            return None
+        return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+
+    @classmethod
+    def _resolve_target_bbox_xyxy(
+        cls,
+        *,
+        gt: Dict[str, Any],
+        image_hw: Tuple[int, int],
+    ) -> Optional[Box]:
+        bbox_xywh = cls._normalize_bbox_xywh(gt.get("target_bbox_xywh_on_layout"))
+        if bbox_xywh is None:
+            return None
+        h, w = image_hw
+        box = cls._xywh_to_xyxy(
+            bbox_xywh[0],
+            bbox_xywh[1],
+            bbox_xywh[2],
+            bbox_xywh[3],
+        )
+        return cls._clamp_box(box, width=w, height=h)
+
+    @staticmethod
+    def _encode_png_bytes(image: np.ndarray) -> bytes:
+        from PIL import Image
+
+        buffer = io.BytesIO()
+        Image.fromarray(image).save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    @staticmethod
+    def _extract_json_object_text(raw: str) -> str:
+        text = str(raw or "").strip()
+        if not text:
+            return ""
+        if text.startswith("```"):
+            text = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+            text = text.strip()
+        if text.startswith("{") and text.endswith("}"):
+            return text
+        m = re.search(r"\{[\s\S]*\}", text)
+        return m.group(0).strip() if m else text
+
+    @classmethod
+    def _parse_bbox_detector_response(
+        cls,
+        raw_text: str,
+        *,
+        width: int,
+        height: int,
+    ) -> Optional[Box]:
+        text = cls._extract_json_object_text(raw_text)
+        if not text:
+            return None
+
+        parsed: Dict[str, Any] = {}
+        norm_text = re.sub(r'"\s+([xywh]\d?)"', r'"\1"', text)
+        norm_text = re.sub(
+            r'"\s+(x1|y1|x2|y2|x|y|w|h|width|height|bbox)"',
+            r'"\1"',
+            norm_text,
+        )
+        try:
+            obj = json.loads(norm_text)
+            if isinstance(obj, dict):
+                parsed = obj
+        except Exception:  # noqa: BLE001
+            parsed = {}
+
+        def _as_int(v: Any) -> Optional[int]:
+            try:
+                return int(round(float(v)))
+            except Exception:  # noqa: BLE001
+                return None
+
+        x1 = _as_int(parsed.get("x1"))
+        y1 = _as_int(parsed.get("y1"))
+        x2 = _as_int(parsed.get("x2"))
+        y2 = _as_int(parsed.get("y2"))
+
+        if None in (x1, y1, x2, y2):
+            x = _as_int(parsed.get("x"))
+            y = _as_int(parsed.get("y"))
+            w = _as_int(parsed.get("w") if parsed.get("w") is not None else parsed.get("width"))
+            h = _as_int(parsed.get("h") if parsed.get("h") is not None else parsed.get("height"))
+            if None not in (x, y, w, h):
+                x1, y1, x2, y2 = int(x), int(y), int(x + w), int(y + h)
+
+        if None in (x1, y1, x2, y2):
+            bbox_list = parsed.get("bbox")
+            if isinstance(bbox_list, list) and len(bbox_list) >= 4:
+                vals = [_as_int(v) for v in bbox_list[:4]]
+                if None not in vals:
+                    x1, y1, x2, y2 = int(vals[0]), int(vals[1]), int(vals[2]), int(vals[3])
+
+        if None in (x1, y1, x2, y2):
+            pairs = list(
+                re.finditer(
+                    r'(?i)"?\s*(x1|y1|x2|y2|x|y)\s*"?\s*[:=]?\s*"?\s*(-?\d+(?:\.\d+)?)',
+                    norm_text,
+                ),
+            )
+            by_key: Dict[str, List[int]] = {}
+            for m in pairs:
+                key = str(m.group(1)).lower()
+                val = _as_int(m.group(2))
+                if val is None:
+                    continue
+                by_key.setdefault(key, []).append(int(val))
+
+            if x1 is None and by_key.get("x1"):
+                x1 = int(by_key["x1"][0])
+            if y1 is None and by_key.get("y1"):
+                y1 = int(by_key["y1"][0])
+            if x2 is None and by_key.get("x2"):
+                x2 = int(by_key["x2"][0])
+            if y2 is None and by_key.get("y2"):
+                y2 = int(by_key["y2"][0])
+
+            if x2 is None and x1 is not None and by_key.get("x"):
+                candidates = [v for v in by_key["x"] if v != x1]
+                if candidates:
+                    larger = [v for v in candidates if v > x1]
+                    x2 = int(larger[0] if larger else candidates[-1])
+            if y2 is None and y1 is not None and by_key.get("y"):
+                candidates = [v for v in by_key["y"] if v != y1]
+                if candidates:
+                    larger = [v for v in candidates if v > y1]
+                    y2 = int(larger[0] if larger else candidates[-1])
+
+        if None in (x1, y1, x2, y2):
+            return None
+        return cls._clamp_box((int(x1), int(y1), int(x2), int(y2)), width=width, height=height)
+
+    @staticmethod
+    def _bbox_detector_prompt(
+        *,
+        expected_text: str,
+        image_wh: Tuple[int, int],
+        mask_bbox: Optional[Box],
+    ) -> str:
+        w, h = image_wh
+        target = str(expected_text or "").strip()
+        hint = "null" if mask_bbox is None else str(list(mask_bbox))
+        return (
+            "You are a visual grounding assistant.\n"
+            "Find the bounding box of the target text in this image.\n"
+            "The text may span multiple lines.\n"
+            f"Image size: width={w}, height={h}\n"
+            f"Target text:\n{target}\n"
+            f"Mask hint (x1,y1,x2,y2): {hint}\n\n"
+            "Return only one JSON object with fields:\n"
+            '{"found": true|false, "x1": int, "y1": int, "x2": int, "y2": int}\n'
+            "No markdown or extra text."
+        )
+
+    @classmethod
+    def _get_bbox_detector_model(cls) -> Optional[Any]:
+        model_id = str(
+            os.environ.get(cls.BBOX_DETECTOR_MODEL_ID_ENV, cls.BBOX_DETECTOR_DEFAULT_MODEL_ID),
+        ).strip() or cls.BBOX_DETECTOR_DEFAULT_MODEL_ID
+        if cls._bbox_detector_model is not None and cls._bbox_detector_model_id == model_id:
+            return cls._bbox_detector_model
+        if cls._bbox_detector_disabled:
+            return None
+        if not os.environ.get("OPENAI_API_KEY"):
+            cls._bbox_detector_disabled = True
+            logger.warning("OPENAI_API_KEY missing; bbox detector metrics will be skipped.")
+            return None
+        try:
+            from design_benchmarks.models import load_model
+
+            cls._bbox_detector_model = load_model(
+                "openai",
+                model_id=model_id,
+                temperature=0.0,
+                max_tokens=512,
+            )
+            cls._bbox_detector_model_id = model_id
+            return cls._bbox_detector_model
+        except Exception as exc:  # noqa: BLE001
+            cls._bbox_detector_disabled = True
+            logger.warning("Failed to initialize bbox detector model: %s", exc)
+            return None
+
+    @classmethod
+    def _detect_text_bbox_llm(
+        cls,
+        *,
+        image: np.ndarray,
+        expected_text: str,
+        mask_bbox: Optional[Box],
+        sample_id: str = "",
+    ) -> Optional[Box]:
+        model = cls._get_bbox_detector_model()
+        if model is None:
+            return None
+        h, w = image.shape[:2]
+        expected_clean = cls._clean_text(expected_text)
+        if not expected_clean:
+            return None
+
+        png_bytes = cls._encode_png_bytes(image)
+        image_hash = hashlib.sha1(png_bytes).hexdigest()
+        text_hash = hashlib.sha1(expected_clean.encode("utf-8")).hexdigest()
+        cache_key = f"{sample_id}|{w}x{h}|{image_hash}|{text_hash}"
+        if cache_key in cls._bbox_detector_cache:
+            return cls._bbox_detector_cache[cache_key]
+
+        prompt = cls._bbox_detector_prompt(
+            expected_text=expected_clean,
+            image_wh=(w, h),
+            mask_bbox=mask_bbox,
+        )
+        try:
+            from design_benchmarks.models.base import ModelInput
+
+            out = model.predict(ModelInput(text=prompt, images=[png_bytes]))
+            raw_text = str(getattr(out, "text", "") or "")
+            bbox = cls._parse_bbox_detector_response(raw_text, width=w, height=h)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("bbox detector request failed for sample %s: %s", sample_id, exc)
+            bbox = None
+
+        cls._bbox_detector_cache[cache_key] = bbox
+        return bbox
 
     @staticmethod
     def _style_prompt_value(value: Any) -> str:

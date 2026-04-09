@@ -38,6 +38,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    # Prefer this checkout's package when multiple design_benchmarks installs exist.
+    sys.path.insert(0, str(SRC_ROOT))
+
 try:
     from design_benchmarks import (
         BaseBenchmark,
@@ -53,9 +59,6 @@ except ModuleNotFoundError as exc:
     )
     raise SystemExit(1) from exc
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
 PROVIDER_TO_REGISTRY = {
     "gemini": "google",
     "openai": "openai",
@@ -64,6 +67,7 @@ PROVIDER_TO_REGISTRY = {
     "hf": "hf",
     "vllm": "vllm",
     "diffusion": "diffusion",
+    "custom": "custom",
 }
 
 DEFAULT_MODEL_IDS = {
@@ -71,9 +75,10 @@ DEFAULT_MODEL_IDS = {
     "openai": "gpt-4o",
     "openai_image": "gpt-image-1.5",
     "anthropic": "claude-sonnet-4-20250514",
-    "hf": "Qwen/Qwen2.5-Coder-0.5B-Instruct",
-    "vllm": "Qwen/Qwen2.5-Coder-0.5B-Instruct",
-    "diffusion": "black-forest-labs/FLUX.1-schnell",
+    "hf": "Qwen/Qwen3-VL-4B-Instruct",
+    "vllm": "Qwen/Qwen3-VL-4B-Instruct",
+    "diffusion": "flux.2-klein-4b",
+    "custom": "custom-entrypoint",
 }
 
 
@@ -97,7 +102,48 @@ def _build_model(args: argparse.Namespace) -> Any:
 
 
 def _model_name(args: argparse.Namespace) -> str:
+    if args.provider == "custom" and getattr(args, "custom_entry", None):
+        return f"custom:{args.custom_entry}"
     return args.model_id or DEFAULT_MODEL_IDS.get(args.provider, "unknown")
+
+
+def _parse_json_dict_arg(value: Any, *, field_name: str) -> Dict[str, Any]:
+    """Parse a dict from inline JSON, file path, or already-parsed dict."""
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return {}
+        path = Path(text)
+        if path.is_file():
+            text = path.read_text(encoding="utf-8")
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            raise ValueError(f"{field_name} must be a JSON object/dict.")
+        return parsed
+    raise ValueError(f"{field_name} must be a JSON object/dict or JSON file path.")
+
+
+def _resolve_model_modality(
+    args: argparse.Namespace,
+    *,
+    provider: str,
+) -> str | None:
+    if provider == "custom":
+        return (
+            getattr(args, "custom_modality", None)
+            or getattr(args, "model_modality", None)
+            or getattr(args, "modality", None)
+            or "any"
+        )
+    return (
+        getattr(args, "model_modality", None)
+        or getattr(args, "modality", None)
+        or None
+    )
 
 
 def _build_model_from_parts(
@@ -105,35 +151,68 @@ def _build_model_from_parts(
 ) -> Any:
     from design_benchmarks.models import load_model
 
-    if provider == "diffusion":
-        return load_model("diffusion", model_id=model_id, resolution=args.resolution)
+    if provider == "custom":
+        entrypoint = (
+            getattr(args, "custom_entry", None)
+            or getattr(args, "entrypoint", None)
+            or (model_id if model_id != DEFAULT_MODEL_IDS["custom"] else "")
+        )
+        if not entrypoint:
+            raise ValueError(
+                "custom provider requires an entrypoint. "
+                "Set --custom-entry module.path:attr, "
+                "or use custom:module.path:attr in --multi-models."
+            )
+        init_kwargs = _parse_json_dict_arg(
+            getattr(args, "custom_init_kwargs", None) or getattr(args, "init_kwargs", None),
+            field_name="custom init kwargs",
+        )
+        custom_modality = _resolve_model_modality(args, provider=provider)
+        return load_model(
+            "custom",
+            entrypoint=entrypoint,
+            init_kwargs=init_kwargs,
+            modality=custom_modality,
+        )
 
-    kwargs: Dict[str, Any] = {"model_id": model_id, "temperature": args.temperature}
-    if args.credentials:
+    if provider == "diffusion":
+        return load_model("diffusion", model_id=model_id, resolution=getattr(args, "resolution", 1024))
+
+    kwargs = {"model_id": model_id, "temperature": getattr(args, "temperature", 0.0)}
+    if getattr(args, "credentials", None):
         kwargs["credentials_path"] = args.credentials
-    if args.max_tokens is not None:
+    if getattr(args, "max_tokens", None) is not None:
         kwargs["max_tokens"] = args.max_tokens
     if provider == "hf":
-        kwargs["device"] = args.device
+        kwargs["device"] = getattr(args, "device", "auto")
+        if getattr(args, "max_tokens", None) is not None:
+            kwargs["max_new_tokens"] = args.max_tokens
+            kwargs.pop("max_tokens", None)
+        model_modality = _resolve_model_modality(args, provider=provider)
+        if model_modality is not None:
+            kwargs["modality"] = model_modality
     if provider == "vllm":
-        kwargs["tensor_parallel_size"] = args.tensor_parallel_size
-        kwargs["top_p"] = args.top_p
-        kwargs["top_k"] = args.top_k
-        kwargs["repetition_penalty"] = args.repetition_penalty
-        if hasattr(args, "presence_penalty") and args.presence_penalty is not None:
+        kwargs["tensor_parallel_size"] = getattr(args, "tensor_parallel_size", 1)
+        kwargs["top_p"] = getattr(args, "top_p", 1.0)
+        kwargs["top_k"] = getattr(args, "top_k", -1)
+        kwargs["repetition_penalty"] = getattr(args, "repetition_penalty", 1.0)
+        if hasattr(args, "presence_penalty") and getattr(args, "presence_penalty", None) is not None:
             kwargs["presence_penalty"] = args.presence_penalty
         if (
             hasattr(args, "limit_mm_per_prompt")
-            and args.limit_mm_per_prompt is not None
+            and getattr(args, "limit_mm_per_prompt", None) is not None
         ):
             kwargs["limit_mm_per_prompt"] = {"image": args.limit_mm_per_prompt}
         if (
             hasattr(args, "max_num_batched_tokens")
-            and args.max_num_batched_tokens is not None
+            and getattr(args, "max_num_batched_tokens", None) is not None
         ):
             kwargs["max_num_batched_tokens"] = args.max_num_batched_tokens
-        if hasattr(args, "no_thinking") and args.no_thinking:
+        if hasattr(args, "no_thinking") and getattr(args, "no_thinking", False):
             kwargs["enable_thinking"] = False
+        model_modality = _resolve_model_modality(args, provider=provider)
+        if model_modality is not None:
+            kwargs["modality"] = model_modality
 
     return load_model(PROVIDER_TO_REGISTRY[provider], **kwargs)
 
@@ -175,6 +254,125 @@ def _build_models_from_specs(args: argparse.Namespace) -> Dict[str, Any]:
         name, provider, model_id = _parse_model_spec(spec)
         models[name] = _build_model_from_parts(provider, model_id, args)
     return models
+
+
+def _collect_preflight_warnings(
+    registry: BenchmarkRegistry,
+    benchmark_ids: List[str],
+    models: Dict[str, Any],
+) -> List[str]:
+    """Return compatibility warnings before running expensive benchmarks."""
+    from design_benchmarks.models.base import Modality
+
+    def _supports_image_output(model: Any, modality: Any) -> bool:
+        return bool(
+            getattr(model, "supports_image_output", modality in {Modality.IMAGE_GENERATION, Modality.ANY})
+        )
+
+    def _supports_video_output(model: Any) -> bool:
+        return bool(getattr(model, "supports_video_output", False))
+
+    def _supports_image_input(model: Any, modality: Any) -> bool:
+        return bool(
+            getattr(model, "supports_image_input", modality in {Modality.TEXT_AND_IMAGE, Modality.ANY})
+        )
+
+    def _supports_mask_editing(model: Any) -> bool:
+        return bool(getattr(model, "supports_mask_editing", False))
+
+    warnings: List[str] = []
+    seen: set[str] = set()
+    for bid in benchmark_ids:
+        bench = registry.get(bid)
+        input_spec = str(bench.meta.input_spec or "").lower()
+        output_spec = str(bench.meta.output_spec or "").lower()
+        visual_input_tokens = (
+            "input image",
+            "layout image",
+            "source image",
+            "source composite image",
+            "rendered image",
+            "reference image",
+            "component asset",
+            "component assets",
+            "visual component",
+            "visual components",
+            "video",
+            "mask",
+            "masked",
+        )
+        image_condition_tokens = (
+            "input image",
+            "layout image",
+            "source image",
+            "source composite image",
+            "rendered image",
+            "reference image",
+            "component asset",
+            "component assets",
+            "visual component",
+            "visual components",
+            "masked",
+            "mask",
+        )
+        needs_visual_input = any(token in input_spec for token in visual_input_tokens)
+        needs_image_output = any(token in output_spec for token in ("image", "png", "jpg", "jpeg"))
+        needs_video_output = any(token in output_spec for token in ("video", "mp4"))
+        needs_image_conditioning = needs_image_output and any(
+            token in input_spec for token in image_condition_tokens
+        )
+        needs_mask_editing = needs_image_output and any(
+            token in input_spec for token in ("mask", "masked", "editable")
+        )
+
+        for model_name, model in models.items():
+            modality = getattr(model, "modality", None)
+
+            if needs_visual_input and modality == Modality.TEXT:
+                msg = (
+                    f"{bid} expects visual input ({bench.meta.input_spec}); "
+                    f"model '{model_name}' is text-only."
+                )
+                if msg not in seen:
+                    seen.add(msg)
+                    warnings.append(msg)
+
+            if needs_image_output and not _supports_image_output(model, modality):
+                msg = (
+                    f"{bid} expects image output ({bench.meta.output_spec}); "
+                    f"model '{model_name}' may need an image-generation capable wrapper."
+                )
+                if msg not in seen:
+                    seen.add(msg)
+                    warnings.append(msg)
+
+            if needs_video_output and not _supports_video_output(model):
+                msg = (
+                    f"{bid} expects video output ({bench.meta.output_spec}); "
+                    f"model '{model_name}' does not advertise video-generation support."
+                )
+                if msg not in seen:
+                    seen.add(msg)
+                    warnings.append(msg)
+
+            if needs_image_conditioning and not _supports_image_input(model, modality):
+                msg = (
+                    f"{bid} uses source/reference images ({bench.meta.input_spec}); "
+                    f"model '{model_name}' may ignore those visual inputs."
+                )
+                if msg not in seen:
+                    seen.add(msg)
+                    warnings.append(msg)
+
+            if needs_mask_editing and not _supports_mask_editing(model):
+                msg = (
+                    f"{bid} is a masked image-editing task ({bench.meta.input_spec}); "
+                    f"model '{model_name}' does not advertise mask/inpainting support."
+                )
+                if msg not in seen:
+                    seen.add(msg)
+                    warnings.append(msg)
+    return warnings
 
 
 def _benchmark_pipeline_ready(bench: BaseBenchmark) -> bool:
@@ -458,7 +656,35 @@ def main() -> None:
             "nano=gemini:gemini-3.1-flash-image-preview)"
         ),
     )
-    parser.add_argument("--credentials", default=None)
+    parser.add_argument(
+        "--credentials", default=None
+    )
+    parser.add_argument(
+        "--custom-entry",
+        default=None,
+        help="Importable Python entrypoint for custom provider: module.path:attr",
+    )
+    parser.add_argument(
+        "--custom-init-kwargs",
+        default=None,
+        help="JSON object or JSON file path for custom entrypoint constructor kwargs.",
+    )
+    parser.add_argument(
+        "--custom-modality",
+        choices=["text", "image", "both", "text_and_image", "image_generation", "any"],
+        default="any",
+        help="Declared modality for custom provider.",
+    )
+    parser.add_argument(
+        "--model-modality",
+        choices=["text", "image", "both", "text_and_image", "image_generation", "any"],
+        default=None,
+        help=(
+            "Override model modality declaration for local providers "
+            "(hf/vllm/custom). Useful when a repo or local path name does not "
+            "make the text-vs-VLM mode obvious."
+        ),
+    )
 
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument(
@@ -634,7 +860,10 @@ def main() -> None:
         except ValueError as exc:
             parser.error(str(exc))
     elif args.provider:
-        models = {_model_name(args): _build_model(args)}
+        try:
+            models = {_model_name(args): _build_model(args)}
+        except ValueError as exc:
+            parser.error(str(exc))
     else:
         parser.error("--provider, --multi-models, or --stub-model required")
 
@@ -645,6 +874,13 @@ def main() -> None:
         parser.error("--benchmarks required (or --list)")
     if not args.dataset_root:
         parser.error("--dataset-root required")
+
+    preflight_warnings = _collect_preflight_warnings(registry, args.benchmarks, models)
+    if preflight_warnings:
+        print("\n[preflight] Potential model/task compatibility issues:")
+        for msg in preflight_warnings:
+            print(f"  - {msg}")
+        print("  Continue with caution; some benchmarks may require a different model mode/setup.\n")
 
     _input_modality = None
     if args.input_modality:

@@ -9,12 +9,22 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import logging
 import os
+import warnings
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .base import BaseModel, Modality, ModelInput, ModelOutput
 from .registry import register_model
+
+logger = logging.getLogger(__name__)
+
+_FATAL_LOAD_ERRORS = (
+    MemoryError,
+    RuntimeError,  # covers CUDA OOM (torch.cuda.OutOfMemoryError is a subclass)
+    OSError,       # disk full, corrupted weights, etc.
+)
 
 
 _VLM_MODEL_ID_HINTS = (
@@ -101,7 +111,11 @@ class HuggingFaceModel(BaseModel):
         modality: Optional[Union[str, Modality]] = None,
         **kwargs: Any,
     ):
-        _ = kwargs
+        if kwargs:
+            warnings.warn(
+                f"HuggingFaceModel received unexpected kwargs: {list(kwargs)}",
+                stacklevel=2,
+            )
         self.model_id = model_id
         self.name = model_id.split("/")[-1]
         self.device = device
@@ -158,6 +172,8 @@ class HuggingFaceModel(BaseModel):
                         device_map=self.device,
                     )
                     break
+                except _FATAL_LOAD_ERRORS:
+                    raise
                 except Exception as exc:  # noqa: BLE001
                     load_errors.append(f"{loader.__name__}: {type(exc).__name__}: {exc}")
             if self._model is None:
@@ -223,8 +239,12 @@ class HuggingFaceModel(BaseModel):
                         return_dict=True,
                         return_tensors="pt",
                     ).to(self._runtime_device)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(
+                        "apply_chat_template failed for %s, falling back to processor: %s",
+                        self.model_id,
+                        exc,
+                    )
         return self._processor(
             text=inp.text,
             images=images or None,
@@ -591,7 +611,7 @@ def _looks_like_media(value: Any) -> bool:
         return suffix in _MEDIA_SUFFIXES
     try:
         from PIL import Image  # type: ignore[reportMissingImports]
-    except Exception:  # noqa: BLE001
+    except ImportError:
         return False
     return isinstance(value, Image.Image)
 
@@ -784,7 +804,11 @@ class Flux2Model(BaseModel):
         default_height: int = 1024,
         **kwargs: Any,
     ):
-        _ = kwargs
+        if kwargs:
+            warnings.warn(
+                f"Flux2Model received unexpected kwargs: {list(kwargs)}",
+                stacklevel=2,
+            )
         self.model_name = str(model_name).strip().lower()
         self.name = self.model_name
         self.device = str(device or "cuda").strip() or "cuda"
@@ -928,6 +952,12 @@ class Flux2Model(BaseModel):
         env_var: str,
         label: str,
     ) -> str:
+        """Download a HF artifact if not already cached.
+
+        Side effect: when *env_var* is non-empty the resolved local path is
+        written to ``os.environ[env_var]`` so that downstream FLUX.2 loaders
+        (which read those env vars) find the file without extra configuration.
+        """
         configured_path = os.environ.get(env_var) if env_var else None
         if configured_path:
             path = Path(configured_path).expanduser()
@@ -1007,7 +1037,7 @@ class Flux2Model(BaseModel):
         try:
             from PIL import Image  # type: ignore[reportMissingImports]
             import io
-        except Exception:
+        except ImportError:
             return None
 
         if value is None:
@@ -1026,7 +1056,7 @@ class Flux2Model(BaseModel):
     def _normalize_reference_image(image: Any) -> Any:
         try:
             from PIL import Image  # type: ignore[reportMissingImports]
-        except Exception:
+        except ImportError:
             return image
 
         width, height = image.size
@@ -1047,7 +1077,7 @@ class Flux2Model(BaseModel):
                 images.append(self._normalize_reference_image(image))
         return images
 
-    def _resolve_output_size(self, inp: ModelInput, input_images: List[Any]) -> tuple[int, int]:
+    def _resolve_output_size(self, inp: ModelInput, input_images: List[Any]) -> Tuple[int, int]:
         meta = inp.metadata or {}
         width = (
             self._coerce_int(meta.get("target_width"))
@@ -1118,8 +1148,7 @@ class Flux2Model(BaseModel):
         if not self.preserve_unmasked_regions or not input_images:
             return generated
 
-        task = str((inp.metadata or {}).get("task") or "").strip().lower()
-        if task == "layout_aspect_ratio_adaptation_image":
+        if (inp.metadata or {}).get("skip_mask_composition", False):
             return generated
 
         mask = self._coerce_pil_image((inp.metadata or {}).get("mask"))
@@ -1128,7 +1157,7 @@ class Flux2Model(BaseModel):
 
         try:
             from PIL import Image  # type: ignore[reportMissingImports]
-        except Exception:
+        except ImportError:
             return generated
 
         base = input_images[0].convert("RGB")

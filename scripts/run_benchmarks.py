@@ -36,13 +36,10 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC_ROOT = REPO_ROOT / "src"
-if str(SRC_ROOT) not in sys.path:
-    # Prefer this checkout's package when multiple design_benchmarks installs exist.
-    sys.path.insert(0, str(SRC_ROOT))
 
 try:
     from design_benchmarks import (
@@ -51,13 +48,23 @@ try:
         BenchmarkRunner,
         RunReport,
     )
-except ModuleNotFoundError as exc:
-    print(
-        "Package 'lica-bench' is not installed. From the repository root run:\n"
-        "  pip install -e .\n",
-        file=sys.stderr,
-    )
-    raise SystemExit(1) from exc
+except ModuleNotFoundError:
+    if str(SRC_ROOT) not in sys.path:
+        sys.path.append(str(SRC_ROOT))
+    try:
+        from design_benchmarks import (
+            BaseBenchmark,
+            BenchmarkRegistry,
+            BenchmarkRunner,
+            RunReport,
+        )
+    except ModuleNotFoundError as exc:
+        print(
+            "Package 'lica-bench' is not installed. From the repository root run:\n"
+            "  pip install -e .\n",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from exc
 
 PROVIDER_TO_REGISTRY = {
     "gemini": "google",
@@ -131,7 +138,7 @@ def _resolve_model_modality(
     args: argparse.Namespace,
     *,
     provider: str,
-) -> str | None:
+) -> Optional[str]:
     if provider == "custom":
         return (
             getattr(args, "custom_modality", None)
@@ -217,7 +224,7 @@ def _build_model_from_parts(
     return load_model(PROVIDER_TO_REGISTRY[provider], **kwargs)
 
 
-def _parse_model_spec(spec: str) -> tuple[str, str, str]:
+def _parse_model_spec(spec: str) -> Tuple[str, str, str]:
     """
     Parse model spec format:
       - provider:model_id
@@ -280,46 +287,33 @@ def _collect_preflight_warnings(
     def _supports_mask_editing(model: Any) -> bool:
         return bool(getattr(model, "supports_mask_editing", False))
 
+    _image_condition_tokens = (
+        "input image",
+        "layout image",
+        "source image",
+        "source composite image",
+        "rendered image",
+        "reference image",
+        "component asset",
+        "component assets",
+        "visual component",
+        "visual components",
+        "mask",
+        "masked",
+    )
+    _visual_input_tokens = _image_condition_tokens + ("video",)
+
     warnings: List[str] = []
-    seen: set[str] = set()
+    seen: Set[str] = set()
     for bid in benchmark_ids:
         bench = registry.get(bid)
         input_spec = str(bench.meta.input_spec or "").lower()
         output_spec = str(bench.meta.output_spec or "").lower()
-        visual_input_tokens = (
-            "input image",
-            "layout image",
-            "source image",
-            "source composite image",
-            "rendered image",
-            "reference image",
-            "component asset",
-            "component assets",
-            "visual component",
-            "visual components",
-            "video",
-            "mask",
-            "masked",
-        )
-        image_condition_tokens = (
-            "input image",
-            "layout image",
-            "source image",
-            "source composite image",
-            "rendered image",
-            "reference image",
-            "component asset",
-            "component assets",
-            "visual component",
-            "visual components",
-            "masked",
-            "mask",
-        )
-        needs_visual_input = any(token in input_spec for token in visual_input_tokens)
+        needs_visual_input = any(token in input_spec for token in _visual_input_tokens)
         needs_image_output = any(token in output_spec for token in ("image", "png", "jpg", "jpeg"))
         needs_video_output = any(token in output_spec for token in ("video", "mp4"))
         needs_image_conditioning = needs_image_output and any(
-            token in input_spec for token in image_condition_tokens
+            token in input_spec for token in _image_condition_tokens
         )
         needs_mask_editing = needs_image_output and any(
             token in input_spec for token in ("mask", "masked", "editable")
@@ -401,15 +395,15 @@ def cmd_run(
     registry: BenchmarkRegistry,
     benchmark_ids: List[str],
     models: Dict[str, Any],
-    data_override: str | None,
-    n: int | None,
-    output_path: str | None,
-    batch_size: int | None = None,
+    data_override: Optional[str],
+    n: Optional[int],
+    output_path: Optional[str],
+    batch_size: Optional[int] = None,
     no_log: bool = False,
     save_images: bool = False,
-    images_dir: str | None = None,
+    images_dir: Optional[str] = None,
     input_modality: Any = None,
-    dataset_root: str | None = None,
+    dataset_root: Optional[str] = None,
 ) -> bool:
     runner = BenchmarkRunner(registry)
     save_dir = None
@@ -656,9 +650,7 @@ def main() -> None:
             "nano=gemini:gemini-3.1-flash-image-preview)"
         ),
     )
-    parser.add_argument(
-        "--credentials", default=None
-    )
+    parser.add_argument("--credentials", default=None)
     parser.add_argument(
         "--custom-entry",
         default=None,
@@ -673,7 +665,10 @@ def main() -> None:
         "--custom-modality",
         choices=["text", "image", "both", "text_and_image", "image_generation", "any"],
         default="any",
-        help="Declared modality for custom provider.",
+        help=(
+            "Declared modality for custom provider (default: 'any'). "
+            "For image-output tasks use 'image_generation'."
+        ),
     )
     parser.add_argument(
         "--model-modality",
@@ -681,8 +676,9 @@ def main() -> None:
         default=None,
         help=(
             "Override model modality declaration for local providers "
-            "(hf/vllm/custom). Useful when a repo or local path name does not "
-            "make the text-vs-VLM mode obvious."
+            "(hf/vllm). Useful when a repo or local path name does not "
+            "make the text-vs-VLM mode obvious.  When unset, modality is "
+            "auto-detected from the model ID."
         ),
     )
 

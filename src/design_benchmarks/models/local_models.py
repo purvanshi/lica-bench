@@ -20,11 +20,23 @@ from .registry import register_model
 
 logger = logging.getLogger(__name__)
 
-_FATAL_LOAD_ERRORS = (
-    MemoryError,
-    RuntimeError,  # covers CUDA OOM (torch.cuda.OutOfMemoryError is a subclass)
-    OSError,       # disk full, corrupted weights, etc.
-)
+def _is_fatal_load_error(exc: BaseException) -> bool:
+    """True for errors that should abort the model-loader fallback loop.
+
+    We re-raise OOM and I/O errors immediately instead of masking them
+    behind a generic "Failed to load" message.  Architecture mismatches
+    (ValueError, KeyError, non-OOM RuntimeError) are expected when trying
+    multiple AutoModel classes and should fall through.
+    """
+    if isinstance(exc, (MemoryError, OSError)):
+        return True
+    try:
+        import torch
+        if isinstance(exc, torch.cuda.OutOfMemoryError):
+            return True
+    except Exception:
+        pass
+    return False
 
 
 _VLM_MODEL_ID_HINTS = (
@@ -172,9 +184,9 @@ class HuggingFaceModel(BaseModel):
                         device_map=self.device,
                     )
                     break
-                except _FATAL_LOAD_ERRORS:
-                    raise
                 except Exception as exc:  # noqa: BLE001
+                    if _is_fatal_load_error(exc):
+                        raise
                     load_errors.append(f"{loader.__name__}: {type(exc).__name__}: {exc}")
             if self._model is None:
                 joined = "\n".join(load_errors)

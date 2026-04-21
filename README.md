@@ -1,6 +1,7 @@
-# lica-bench
+# Graphic-Design-Bench: A Comprehensive Benchmark for Evaluating AI on Graphic Design Tasks
 
-**lica-bench** is a structured evaluation suite for measuring how well vision-language models understand, edit, and generate graphic design artifacts. It covers layout reasoning, typography, visual hierarchy, SVG/vector understanding, template variants, animation, and more.
+**lica-bench** is a structured evaluation suite for measuring how well vision-language models understand, edit, and generate graphic design artifacts. [Paper link](https://arxiv.org/pdf/2604.04192) 
+It covers layout reasoning, typography, visual hierarchy, SVG/vector understanding, template variants, animation, and more.
 
 Benchmarks use the [Lica dataset](https://github.com/purvanshi/lica-dataset) (1,148 graphic design layouts). We release [design-benchmarks.zip](https://storage.googleapis.com/lica-assets/websites/blog/design-benchmarks.zip) containing all task-specific evaluation data organized under **benchmarks/<domain>/** (including manifests, JSON specifications, and prepared assets), along with model outputs for each task.
 

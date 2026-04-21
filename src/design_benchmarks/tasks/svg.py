@@ -540,6 +540,11 @@ class SVGStyleEditing(BaseBenchmark):
 # ===========================================================================
 
 _GEN_METRICS = ["mse", "ssim", "lpips", "clip_score", "code_length", "weighted_complexity", "svg_validity"]
+_LOO_METRICS = ["loo_mean_delta", "loo_harmful_frac", "loo_helpful_frac"]
+_STRUCTURAL_METRICS = [
+    "loo_purity", "loo_coverage", "loo_compactness", "loo_locality",
+    "loo_editability",
+]
 
 
 def _evaluate_svg_generation(
@@ -568,6 +573,142 @@ def _evaluate_svg_generation(
     }
 
 
+def _evaluate_svg_loo_metrics(
+    predictions: List[str], ground_truth: List[Dict[str, str]],
+) -> Dict[str, float]:
+    """Compute LOO element scoring + structural metrics.
+
+    Returns an empty dict when ``svg-loo-metrics`` is not installed so the
+    basic generation metrics are unaffected.
+    """
+    try:
+        from design_benchmarks.metrics.svg_loo import (
+            CLIPImageScorer,
+            CLIPSegHeatmapGenerator,
+            compute_attribution_matrix,
+            compute_structural_metrics,
+            element_score_summary,
+            extract_concepts_from_image,
+            extract_concepts_from_text,
+            render_svg_to_image,
+            score_svg_loo,
+        )
+    except ImportError:
+        return {}
+
+    import os
+
+    import torch
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    scorer = CLIPImageScorer(device=device)
+
+    loo_deltas: List[float] = []
+    harmful_fracs: List[float] = []
+    helpful_fracs: List[float] = []
+    purities: List[float] = []
+    coverages: List[float] = []
+    compactnesses: List[float] = []
+    localities: List[float] = []
+    editabilities: List[float] = []
+
+    # Lazy-init CLIPSeg only when a description is first encountered
+    heatmap_gen = None
+
+    # Detect which VLM API provider is available (if any) for concept extraction.
+    # Priority: env var LOO_CONCEPT_PROVIDER > first available key.
+    vlm_provider: str | None = os.environ.get("LOO_CONCEPT_PROVIDER")
+    if vlm_provider is None:
+        for prov, key_var in [
+            ("gemini", "GOOGLE_API_KEY"),
+            ("openai", "OPENAI_API_KEY"),
+            ("anthropic", "ANTHROPIC_API_KEY"),
+        ]:
+            if os.environ.get(key_var):
+                vlm_provider = prov
+                break
+
+    for pred_svg, gt_dict in zip(predictions, ground_truth):
+        if not pred_svg or "<svg" not in pred_svg:
+            continue
+
+        # Render the prediction as its own reference for LOO self-analysis
+        ref_img = render_svg_to_image(pred_svg, width=384, height=384)
+        if ref_img is None:
+            continue
+
+        # Tier 1: LOO element scoring
+        try:
+            result = score_svg_loo(
+                pred_svg, ref_img, scorer=scorer, device=device,
+            )
+            summary = element_score_summary(result)
+            loo_deltas.append(summary["mean_loo_delta"])
+            harmful_fracs.append(summary["harmful_frac"])
+            helpful_fracs.append(summary["helpful_frac"])
+        except Exception:
+            logger.debug("LOO scoring failed for one sample", exc_info=True)
+            continue
+
+        # Tier 2+3: Structural metrics — need concepts
+        try:
+            # 1. Pre-extracted concepts in ground truth (best)
+            concepts = gt_dict.get("concepts")
+
+            # 2. VLM API extraction from rendered image (if API available)
+            if not concepts and vlm_provider:
+                concepts = extract_concepts_from_image(
+                    ref_img,
+                    description=gt_dict.get("description", ""),
+                    provider=vlm_provider,
+                )
+
+            # 3. Text-based fallback from description
+            desc = gt_dict.get("description", "").strip()
+            if not concepts and desc:
+                concepts = extract_concepts_from_text(desc)
+
+            if not concepts or len(concepts) < 2:
+                continue
+
+            if heatmap_gen is None:
+                heatmap_gen = CLIPSegHeatmapGenerator(device=device)
+
+            attr = compute_attribution_matrix(
+                pred_svg, concepts, heatmap_generator=heatmap_gen, device=device,
+            )
+            if attr is None:
+                continue
+
+            metrics = compute_structural_metrics(attr.overlap_matrix, concepts)
+            purities.append(metrics.purity)
+            coverages.append(metrics.coverage)
+            compactnesses.append(metrics.compactness)
+            localities.append(metrics.locality)
+            editabilities.append(metrics.editability)
+        except Exception:
+            logger.debug(
+                "Structural metric computation failed for one sample",
+                exc_info=True,
+            )
+
+    results: Dict[str, float] = {}
+
+    if loo_deltas:
+        results["loo_mean_delta"] = sum(loo_deltas) / len(loo_deltas)
+        results["loo_harmful_frac"] = sum(harmful_fracs) / len(harmful_fracs)
+        results["loo_helpful_frac"] = sum(helpful_fracs) / len(helpful_fracs)
+
+    if purities:
+        results["loo_purity"] = sum(purities) / len(purities)
+        results["loo_coverage"] = sum(coverages) / len(coverages)
+        results["loo_compactness"] = sum(compactnesses) / len(compactnesses)
+        results["loo_locality"] = sum(localities) / len(localities)
+        results["loo_editability"] = sum(editabilities) / len(editabilities)
+
+    return results
+
+
 @benchmark
 class TextToSVGGeneration(BaseBenchmark):
     """svg-6 — Generate SVG code from a natural-language description."""
@@ -588,7 +729,7 @@ class TextToSVGGeneration(BaseBenchmark):
         description="Generate SVG code from a natural-language description",
         input_spec="Natural-language description of the target graphic",
         output_spec="SVG code",
-        metrics=_GEN_METRICS,
+        metrics=_GEN_METRICS + _LOO_METRICS + _STRUCTURAL_METRICS,
     )
 
     def load_data(self, data_dir, *, n=None, dataset_root: Union[str, Path]):
@@ -623,7 +764,9 @@ class TextToSVGGeneration(BaseBenchmark):
         return _strip_svg_wrapper(output.text)
 
     def evaluate(self, predictions, ground_truth):
-        return _evaluate_svg_generation(predictions, ground_truth)
+        results = _evaluate_svg_generation(predictions, ground_truth)
+        results.update(_evaluate_svg_loo_metrics(predictions, ground_truth))
+        return results
 
 
 @benchmark
@@ -646,7 +789,7 @@ class ImageToSVGGeneration(BaseBenchmark):
         description="Generate SVG code that reproduces a given image",
         input_spec="Rendered image of target graphic",
         output_spec="SVG code",
-        metrics=_GEN_METRICS,
+        metrics=_GEN_METRICS + _LOO_METRICS + _STRUCTURAL_METRICS,
     )
 
     def load_data(self, data_dir, *, n=None, dataset_root: Union[str, Path]):
@@ -681,7 +824,9 @@ class ImageToSVGGeneration(BaseBenchmark):
         return _strip_svg_wrapper(output.text)
 
     def evaluate(self, predictions, ground_truth):
-        return _evaluate_svg_generation(predictions, ground_truth)
+        results = _evaluate_svg_generation(predictions, ground_truth)
+        results.update(_evaluate_svg_loo_metrics(predictions, ground_truth))
+        return results
 
 
 @benchmark
@@ -705,7 +850,7 @@ class ImageTextToSVGGeneration(BaseBenchmark):
         description="Generate SVG code from an image and its description",
         input_spec="Rendered image + natural-language description of target graphic",
         output_spec="SVG code",
-        metrics=_GEN_METRICS,
+        metrics=_GEN_METRICS + _LOO_METRICS + _STRUCTURAL_METRICS,
     )
 
     def load_data(self, data_dir, *, n=None, dataset_root: Union[str, Path]):
@@ -744,4 +889,6 @@ class ImageTextToSVGGeneration(BaseBenchmark):
         return _strip_svg_wrapper(output.text)
 
     def evaluate(self, predictions, ground_truth):
-        return _evaluate_svg_generation(predictions, ground_truth)
+        results = _evaluate_svg_generation(predictions, ground_truth)
+        results.update(_evaluate_svg_loo_metrics(predictions, ground_truth))
+        return results

@@ -772,7 +772,7 @@ class IntentToLayoutGeneration(BaseBenchmark):
         model_spec = str(
             os.environ.get(
                 "DESIGN_BENCHMARKS_MJUDGE_MODEL",
-                "gemini:gemini-3.1-flash-lite-preview",
+                "openai:gpt-5.4",
             )
         ).strip()
         if ":" not in model_spec:
@@ -3571,18 +3571,21 @@ class AspectRatioAdaptation(PartialLayoutCompletion):
                 direct_components=[],
                 eval_size=(eval_w, eval_h),
             )
-            # Force image-edit style conditioning using full editable mask.
-            # This ensures source image guidance is actually consumed by edit-capable APIs.
+            # Force image-edit conditioning with an almost-full mask.
+            # Some providers are unstable with fully-white masks (all editable),
+            # so we keep a 1px non-editable border for robustness.
             mask_h = max(8, source_h)
             mask_w = max(8, source_w)
             full_edit_mask: Any = None
             try:
                 from PIL import Image
 
-                full_edit_mask = Image.fromarray(
-                    np.full((mask_h, mask_w), 255, dtype=np.uint8),
-                    mode="L",
-                )
+                arr = np.full((mask_h, mask_w), 255, dtype=np.uint8)
+                arr[0, :] = 0
+                arr[-1, :] = 0
+                arr[:, 0] = 0
+                arr[:, -1] = 0
+                full_edit_mask = Image.fromarray(arr, mode="L")
             except Exception:
                 full_edit_mask = None
             metadata: Dict[str, Any] = {
@@ -4744,6 +4747,8 @@ class ComponentDetection(BaseBenchmark):
 
 
 class _LayerInsertionImageUtils:
+    _fid_inception_bundle: Any = None
+
     @staticmethod
     def _to_rgb_array(value: Any) -> Optional[np.ndarray]:
         if value is None:
@@ -4775,9 +4780,76 @@ class _LayerInsertionImageUtils:
         except Exception:
             return image
 
-    @staticmethod
-    def _inception_feature(image: np.ndarray) -> Optional[np.ndarray]:
-        return None
+    @classmethod
+    def _inception_feature(cls, image: np.ndarray) -> Optional[np.ndarray]:
+        """Extract Inception-v3 pool3 (2048) features for FID."""
+        if cls._fid_inception_bundle is None:
+            try:
+                import torch
+
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                try:
+                    from pytorch_fid.inception import InceptionV3
+
+                    block = InceptionV3.BLOCK_INDEX_BY_DIM[2048]
+                    model = InceptionV3([block]).to(device).eval()
+                    cls._fid_inception_bundle = ("pytorch_fid", model, torch, device)
+                except Exception:
+                    from torchvision.models import Inception_V3_Weights, inception_v3
+
+                    weights = Inception_V3_Weights.IMAGENET1K_V1
+                    try:
+                        model = inception_v3(weights=weights, aux_logits=False)
+                    except Exception:
+                        # torchvision>=0.23 enforces aux_logits=True with pretrained weights.
+                        model = inception_v3(weights=weights)
+                    if hasattr(model, "aux_logits"):
+                        model.aux_logits = False
+                    if hasattr(model, "AuxLogits"):
+                        model.AuxLogits = None
+                    model.fc = torch.nn.Identity()
+                    model = model.to(device).eval()
+                    cls._fid_inception_bundle = ("torchvision", model, torch, device)
+            except Exception as exc:
+                logger.info("Inception FID feature extractor unavailable: %s", exc)
+                cls._fid_inception_bundle = False
+
+        if not cls._fid_inception_bundle:
+            return None
+
+        mode, model, torch, device = cls._fid_inception_bundle
+        try:
+            img = image
+            if img.dtype != np.uint8:
+                img = np.clip(img, 0, 255).astype(np.uint8)
+            img = np.array(img, copy=True)
+
+            x = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).float() / 255.0
+            x = torch.nn.functional.interpolate(
+                x,
+                size=(299, 299),
+                mode="bilinear",
+                align_corners=False,
+            ).to(device)
+
+            with torch.no_grad():
+                if mode == "pytorch_fid":
+                    feats = model(x)[0]
+                    feats = feats.squeeze(-1).squeeze(-1)
+                else:
+                    mean = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 3, 1, 1)
+                    std = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 3, 1, 1)
+                    x = (x - mean) / std
+                    feats = model(x)
+
+            vec = feats.detach().cpu().numpy().reshape(-1).astype(np.float64)
+            if vec.size != 2048:
+                return None
+            if not np.all(np.isfinite(vec)):
+                return None
+            return vec
+        except Exception:
+            return None
 
     @staticmethod
     def _to_gray_mask(value: Any, target_hw: Tuple[int, int]) -> Optional[np.ndarray]:
@@ -4841,6 +4913,8 @@ class LayerAwareObjectInsertion(BaseBenchmark):
         "and blend it naturally with the surrounding layout."
     )
     VALID_MODES = ("reference", "description")
+    MODE_OVERRIDE_ENV = "DESIGN_BENCHMARKS_LAYOUT8_FORCE_MODE"
+    _invalid_mode_override_warned = False
 
     _clip_img_bundle: Any = None
     _dino_bundle: Any = None
@@ -4866,11 +4940,33 @@ class LayerAwareObjectInsertion(BaseBenchmark):
             return str(p)
         return str((base_dir / p).resolve())
 
+    @classmethod
+    def _resolve_sample_mode(cls, sample: Dict[str, Any]) -> str:
+        mode = str(sample.get("mode") or "reference").strip().lower()
+        if mode not in cls.VALID_MODES:
+            mode = "reference"
+
+        override = str(os.environ.get(cls.MODE_OVERRIDE_ENV, "")).strip().lower()
+        if not override:
+            return mode
+        if override in cls.VALID_MODES:
+            return override
+        if not cls._invalid_mode_override_warned:
+            logger.warning(
+                "Ignoring invalid %s=%r. Use one of: %s",
+                cls.MODE_OVERRIDE_ENV,
+                override,
+                ", ".join(cls.VALID_MODES),
+            )
+            cls._invalid_mode_override_warned = True
+        return mode
+
     def _should_include_reference_asset(self, sample: Dict[str, Any]) -> bool:
-        return sample.get("mode", "reference") == "reference" and bool(sample.get("reference_asset"))
+        mode = self._resolve_sample_mode(sample)
+        return mode == "reference" and bool(sample.get("reference_asset"))
 
     def _should_include_asset_description(self, sample: Dict[str, Any]) -> bool:
-        return sample.get("mode", "reference") == "description"
+        return self._resolve_sample_mode(sample) == "description"
 
     @staticmethod
     def _normalize_reference_alt(raw: Any, *, max_chars: int = 500) -> str:
@@ -5036,7 +5132,9 @@ class LayerAwareObjectInsertion(BaseBenchmark):
                 )
                 mode = "reference"
 
-            requires_reference_asset = mode == "reference"
+            effective_mode = self._resolve_sample_mode({"mode": mode})
+
+            requires_reference_asset = effective_mode == "reference"
             if not masked_layout or not mask or not gt_image:
                 logger.warning("Incomplete G15 sample at index %d, skipping", i)
                 continue
@@ -5068,7 +5166,8 @@ class LayerAwareObjectInsertion(BaseBenchmark):
             samples.append(
                 {
                     "sample_id": sid,
-                    "mode": mode,
+                    "mode": effective_mode,
+                    "source_mode": mode,
                     "input_image": self._resolve(base_dir, str(masked_layout)),
                     "mask": self._resolve(base_dir, str(mask)),
                     "reference_asset": reference_asset_path,
@@ -5169,6 +5268,7 @@ class LayerAwareObjectInsertion(BaseBenchmark):
         from design_benchmarks.models.base import ModelInput
 
         prompt = self._compose_prompt(sample)
+        mode = self._resolve_sample_mode(sample)
         images = [sample["input_image"]]
         if self._should_include_reference_asset(sample) and sample.get("reference_asset"):
             images.append(sample["reference_asset"])
@@ -5180,6 +5280,10 @@ class LayerAwareObjectInsertion(BaseBenchmark):
             "task": "g15_layer_aware_object_insertion",
             "benchmark_id": self.meta.id,
             "sample_id": str(sample.get("sample_id") or ""),
+            "mode": mode,
+            # For Flux2, require mask-aware conditioning and avoid post-hoc compositing.
+            "use_mask_conditioning": True,
+            "skip_mask_composition": True,
         }
         width, height = _LayerInsertionImageUtils._read_image_size(sample.get("input_image"))
         if width > 0 and height > 0:
@@ -5193,9 +5297,10 @@ class LayerAwareObjectInsertion(BaseBenchmark):
         )
 
     def _compose_prompt(self, sample: Dict[str, Any]) -> str:
+        mode = self._resolve_sample_mode(sample)
         default_prompt = (
             self.DEFAULT_PROMPT_DESCRIPTION
-            if sample.get("mode", "reference") == "description"
+            if mode == "description"
             else self.DEFAULT_PROMPT_REFERENCE
         )
         user_intent = str(sample.get("prompt") or default_prompt).strip()

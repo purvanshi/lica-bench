@@ -1065,6 +1065,26 @@ class Flux2Model(BaseModel):
         return None
 
     @staticmethod
+    def _coerce_pil_mask(value: Any) -> Optional[Any]:
+        try:
+            from PIL import Image  # type: ignore[reportMissingImports]
+            import io
+        except ImportError:
+            return None
+
+        if value is None:
+            return None
+        if isinstance(value, Image.Image):
+            return value
+        if isinstance(value, (bytes, bytearray)):
+            return Image.open(io.BytesIO(value))
+        if isinstance(value, (str, Path)):
+            path = Path(value)
+            if path.is_file():
+                return Image.open(path)
+        return None
+
+    @staticmethod
     def _normalize_reference_image(image: Any) -> Any:
         try:
             from PIL import Image  # type: ignore[reportMissingImports]
@@ -1081,13 +1101,41 @@ class Flux2Model(BaseModel):
         new_height = max(64, int(round(height * scale)))
         return image.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
-    def _collect_input_images(self, inp: ModelInput) -> List[Any]:
+    def _collect_input_images(self, inp: ModelInput) -> Tuple[List[Any], bool]:
+        try:
+            from PIL import Image  # type: ignore[reportMissingImports]
+        except ImportError:
+            Image = None  # type: ignore[assignment]
+
         images: List[Any] = []
         for value in inp.images:
             image = self._coerce_pil_image(value)
             if image is not None:
                 images.append(self._normalize_reference_image(image))
-        return images
+        if not images:
+            return images, False
+
+        metadata = inp.metadata or {}
+        if not bool(metadata.get("use_mask_conditioning", False)):
+            return images, False
+
+        mask = self._coerce_pil_mask(metadata.get("mask"))
+        if mask is None or Image is None:
+            return images, False
+
+        base = images[0].convert("RGB")
+        mask_l = mask.convert("L")
+        if mask_l.size != base.size:
+            mask_l = mask_l.resize(base.size, Image.Resampling.NEAREST)
+
+        # Require an informative (non-trivial) binary-like mask.
+        if mask_l.getextrema() in {(0, 0), (255, 255)}:
+            return images, False
+
+        # White=editable, black=preserve: blank editable region for conditioning.
+        blank = Image.new("RGB", base.size, (127, 127, 127))
+        images[0] = self._normalize_reference_image(Image.composite(blank, base, mask_l))
+        return images, True
 
     def _resolve_output_size(self, inp: ModelInput, input_images: List[Any]) -> Tuple[int, int]:
         meta = inp.metadata or {}
@@ -1156,21 +1204,26 @@ class Flux2Model(BaseModel):
             )
         return self.guidance
 
-    def _compose_masked_output(self, inp: ModelInput, input_images: List[Any], generated: Any) -> Any:
+    def _compose_masked_output(
+        self,
+        inp: ModelInput,
+        input_images: List[Any],
+        generated: Any,
+    ) -> Tuple[Any, bool]:
         if not self.preserve_unmasked_regions or not input_images:
-            return generated
+            return generated, False
 
         if (inp.metadata or {}).get("skip_mask_composition", False):
-            return generated
+            return generated, False
 
-        mask = self._coerce_pil_image((inp.metadata or {}).get("mask"))
+        mask = self._coerce_pil_mask((inp.metadata or {}).get("mask"))
         if mask is None:
-            return generated
+            return generated, False
 
         try:
             from PIL import Image  # type: ignore[reportMissingImports]
         except ImportError:
-            return generated
+            return generated, False
 
         base = input_images[0].convert("RGB")
         output = generated.convert("RGB")
@@ -1180,8 +1233,8 @@ class Flux2Model(BaseModel):
         if mask_l.size != base.size:
             mask_l = mask_l.resize(base.size, Image.Resampling.NEAREST)
         if mask_l.getextrema() == (255, 255):
-            return generated
-        return Image.composite(output, base, mask_l)
+            return generated, False
+        return Image.composite(output, base, mask_l), True
 
     def predict(self, inp: ModelInput) -> ModelOutput:
         bundle = self._ensure_loaded()
@@ -1194,7 +1247,7 @@ class Flux2Model(BaseModel):
             torch.cuda.set_device(device_obj.index)
 
         prompt = str(inp.text or (inp.metadata or {}).get("prompt") or "").strip()
-        input_images = self._collect_input_images(inp)
+        input_images, mask_conditioning_applied = self._collect_input_images(inp)
         width, height = self._resolve_output_size(inp, input_images)
         num_steps = self._resolve_num_steps(model_info)
         guidance = self._resolve_guidance(model_info)
@@ -1258,7 +1311,9 @@ class Flux2Model(BaseModel):
 
             generated = Image.fromarray((127.5 * (x + 1.0)).cpu().byte().numpy())
 
-        generated = self._compose_masked_output(inp, input_images, generated)
+        generated, mask_composition_applied = self._compose_masked_output(
+            inp, input_images, generated
+        )
 
         return ModelOutput(
             images=[generated],
@@ -1270,6 +1325,8 @@ class Flux2Model(BaseModel):
                 "num_steps": num_steps,
                 "guidance": guidance,
                 "input_image_count": len(input_images),
+                "mask_conditioning_applied": mask_conditioning_applied,
+                "mask_composition_applied": mask_composition_applied,
             },
             usage={
                 "seed": seed,
@@ -1278,6 +1335,8 @@ class Flux2Model(BaseModel):
                 "num_steps": num_steps,
                 "guidance": guidance,
                 "input_image_count": len(input_images),
+                "mask_conditioning_applied": mask_conditioning_applied,
+                "mask_composition_applied": mask_composition_applied,
             },
         )
 

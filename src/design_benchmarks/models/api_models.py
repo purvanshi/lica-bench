@@ -39,6 +39,18 @@ class OpenAIModel(BaseModel):
         self.temperature = temperature
         self.max_tokens = max_tokens
 
+    @staticmethod
+    def _token_budget_field(model_id: str) -> str:
+        """Resolve OpenAI token limit field by model family.
+
+        Newer GPT-5 chat models reject ``max_tokens`` and require
+        ``max_completion_tokens``.
+        """
+        normalized = str(model_id or "").strip().lower()
+        if normalized.startswith("gpt-5"):
+            return "max_completion_tokens"
+        return "max_tokens"
+
     def predict(self, inp: ModelInput) -> ModelOutput:
         try:
             from openai import OpenAI
@@ -55,20 +67,27 @@ class OpenAIModel(BaseModel):
         for img in inp.images:
             content.append({"type": "image_url", "image_url": {"url": _to_data_url(img)}})
 
-        response = client.chat.completions.create(
-            model=self.model_id,
-            messages=[{"role": "user", "content": content}],
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-        )
+        request_kwargs: Dict[str, Any] = {
+            "model": self.model_id,
+            "messages": [{"role": "user", "content": content}],
+            "temperature": self.temperature,
+        }
+        request_kwargs[self._token_budget_field(self.model_id)] = self.max_tokens
+        response = client.chat.completions.create(**request_kwargs)
         choice = response.choices[0]
+        usage_raw = getattr(response, "usage", None)
+        usage: Dict[str, Any] = {}
+        if usage_raw is not None:
+            prompt_tokens = getattr(usage_raw, "prompt_tokens", None)
+            completion_tokens = getattr(usage_raw, "completion_tokens", None)
+            if prompt_tokens is not None:
+                usage["prompt_tokens"] = prompt_tokens
+            if completion_tokens is not None:
+                usage["completion_tokens"] = completion_tokens
         return ModelOutput(
             text=choice.message.content or "",
             raw=response,
-            usage={
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-            },
+            usage=usage,
         )
 
 
@@ -82,6 +101,9 @@ class OpenAIImageModel(BaseModel):
     """OpenAI image model wrapper for generation/editing workflows."""
 
     modality = Modality.IMAGE_GENERATION
+    supports_image_output = True
+    supports_image_input = True
+    supports_mask_editing = True
 
     def __init__(
         self,

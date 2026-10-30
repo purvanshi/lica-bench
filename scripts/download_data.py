@@ -25,7 +25,7 @@ import zipfile
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-LICA_DATA_URL = "https://storage.googleapis.com/lica-ml/gdb-dataset.zip"
+LICA_DATA_URL = "https://huggingface.co/datasets/purvanshi/lica-data/resolve/main/gdb/gdb-dataset.zip"
 DEFAULT_OUT_DIR = Path("data")
 BUNDLE_NAME = "gdb-dataset"
 LICA_DATA_DIR = "lica-data"

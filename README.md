@@ -1,16 +1,16 @@
 # Graphic-Design-Bench: A Comprehensive Benchmark for Evaluating AI on Graphic Design Tasks
 
 <div style='display:flex; gap: 0.25rem; '>
-<a href='https://huggingface.co/datasets/lica-world/GDB'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-GDBench-blue'></a>
+<a href='https://huggingface.co/datasets/purvanshi/lica-data'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-GDBench-blue'></a>
 <a href='https://huggingface.co/datasets/lica-world/GDB-video'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-GDBench--Video-blue'></a>
 <a href='https://arxiv.org/pdf/2604.04192'><img src='https://img.shields.io/badge/Paper-PDF-red'></a>
 </div>
 
 **GDB** evaluates vision-language models on professional graphic design tasks — layout reasoning, typography, SVG editing, template matching, animation. The paper defines 49 evaluation tasks; this repo ships 44 benchmark pipelines covering all of them, organized into 7 code-level domains and built on the [Lica dataset](https://github.com/purvanshi/lica-dataset) (1,148 real design layouts).
 
-**Paper:** [arXiv:2604.04192](https://arxiv.org/abs/2604.04192) &nbsp;|&nbsp; **Dataset:** [HuggingFace](https://huggingface.co/datasets/lica-world/GDB) &nbsp;|&nbsp; **Blog:** [lica.world](https://lica.world/blog/gdb-real-world-benchmark-for-graphic-design)
+**Paper:** [arXiv:2604.04192](https://arxiv.org/abs/2604.04192) &nbsp;|&nbsp; **Dataset:** [HuggingFace](https://huggingface.co/datasets/purvanshi/lica-data) &nbsp;|&nbsp; **Blog:** [lica.world](https://lica.world/blog/gdb-real-world-benchmark-for-graphic-design)
 
-We release [design-benchmarks.zip](https://storage.googleapis.com/lica-assets/websites/blog/design-benchmarks.zip) containing all task-specific evaluation data organized under **`benchmarks/<domain>/`** (including manifests, JSON specifications, and prepared assets), along with model outputs for each task.
+We release [design-benchmarks.zip](https://huggingface.co/datasets/purvanshi/lica-data/blob/main/gdb/outputs/design-benchmarks.zip) containing all task-specific evaluation data organized under **`benchmarks/<domain>/`** (including manifests, JSON specifications, and prepared assets), along with model outputs for each task.
 
 ## Benchmarks
 
@@ -39,7 +39,7 @@ detection (`layout-12`) use the nested component tree, image alt text, and eleme
 the v1 Lica layouts. Their samples ship in `benchmarks/layout/` (built with
 `scripts/build_lica_v1_tasks.py`); copy them into `data/gdb-dataset/benchmarks/layout/`. The
 images they reference are the renders in `lica-data/`, also available from the
-[LICA dataset](https://huggingface.co/datasets/lica-world/lica-dataset).
+[LICA dataset](https://huggingface.co/datasets/purvanshi/lica-data).
 
 ## Setup
 
@@ -79,7 +79,7 @@ what `v1.0-*` will mean once the evaluation definitions are frozen.
 
 ### Data
 
-Without `--dataset-root`, benchmarks are loaded directly from [HuggingFace](https://huggingface.co/datasets/lica-world/GDB) (requires the `.[hub]` extra). No download step needed.
+Without `--dataset-root`, benchmarks are loaded directly from [HuggingFace](https://huggingface.co/datasets/purvanshi/lica-data) (requires the `.[hub]` extra). No download step needed.
 
 For local data (offline use, full benchmark coverage):
 

@@ -207,7 +207,7 @@ class BenchmarkRunner:
         dataset_root : str or Path, optional
             Top-level dataset directory.  If ``None`` (and *data_dir* is
             also ``None``), samples are loaded from the HuggingFace Hub
-            dataset ``lica-world/GDB`` instead.
+            dataset ``purvanshi/lica-data`` instead.
         n : int, optional
             Limit samples per benchmark (passed to ``load_data``).
         batch_size : int, optional

@@ -19,7 +19,7 @@ gdb = "gdb.cli:main"
 [project.urls]
 Homepage = "https://github.com/purvanshi/lica-bench"
 Repository = "https://github.com/purvanshi/lica-bench"
-Dataset = "https://huggingface.co/datasets/lica-world/GDB"
+Dataset = "https://huggingface.co/datasets/purvanshi/lica-data"
 
 [project.optional-dependencies]
 metrics = [

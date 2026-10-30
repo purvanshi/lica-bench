@@ -24,7 +24,7 @@ def _install_fake_datasets(monkeypatch, load_dataset):
 
 def test_load_from_hub_materializes_image6_auxiliary_assets(monkeypatch, tmp_path):
     def fake_load_dataset(repo_id, benchmark_id, split, streaming):
-        assert repo_id == "lica-world/GDB"
+        assert repo_id == "purvanshi/lica-data"
         assert benchmark_id == "image-6"
         assert split == "train"
         assert streaming is True

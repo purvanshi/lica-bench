@@ -1,4 +1,4 @@
-"""Load benchmark samples from the HuggingFace Hub dataset (lica-world/GDB).
+"""Load benchmark samples from the HuggingFace Hub dataset (purvanshi/lica-data).
 
 Used when the runner has no ``--dataset-root``. Images are cached to disk
 so ``build_model_input()`` receives file paths, matching the local contract.
@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-HF_REPO_ID = "lica-world/GDB"
+HF_REPO_ID = "purvanshi/lica-data"
 _DEFAULT_CACHE = Path.home() / ".cache" / "gdb" / "images"
 
 

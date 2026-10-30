@@ -23,7 +23,7 @@ import re
 from pathlib import Path
 from urllib.request import urlopen
 
-V1_URL = "https://storage.googleapis.com/lica-ml-data/datasets/lica-data-public/v1"
+V1_URL = "https://huggingface.co/datasets/purvanshi/lica-data/resolve/main/gdb/v1"
 VECTOR_TYPES = {"frame_or_svg", "lottie_svg", "graph_svg", "svg_stroke"}
 
 LAYER_ORDER_PROMPT = (

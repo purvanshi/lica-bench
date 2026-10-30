@@ -18,7 +18,7 @@ Single entry point for all benchmark operations.
 
 ### Data loading
 
-`--dataset-root` is optional. Without it, data is streamed from [HuggingFace](https://huggingface.co/datasets/lica-world/GDB) (requires `pip install -e ".[hub]"`). For full benchmark coverage or offline use, download locally first with `download_data.py` and pass `--dataset-root data/gdb-dataset`.
+`--dataset-root` is optional. Without it, data is streamed from [HuggingFace](https://huggingface.co/datasets/purvanshi/lica-data) (requires `pip install -e ".[hub]"`). For full benchmark coverage or offline use, download locally first with `download_data.py` and pass `--dataset-root data/gdb-dataset`.
 
 ```bash
 # HuggingFace (no download needed)

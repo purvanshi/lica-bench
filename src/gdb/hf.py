@@ -1,5 +1,7 @@
 """Load benchmark samples from the HuggingFace Hub dataset (purvanshi/lica-data).
 
+Each benchmark is read from its parquet files under ``gdb/<benchmark_id>/``.
+
 Used when the runner has no ``--dataset-root``. Images are cached to disk
 so ``build_model_input()`` receives file paths, matching the local contract.
 """
@@ -159,8 +161,13 @@ def load_from_hub(
 
     logger.info("Loading %s from HuggingFace (%s)...", benchmark_id, repo_id)
     try:
-        ds = load_dataset(repo_id, benchmark_id, split="train", streaming=True)
-    except ValueError as exc:
+        ds = load_dataset(
+            "parquet",
+            data_files=f"hf://datasets/{repo_id}/gdb/{benchmark_id}/train-*.parquet",
+            split="train",
+            streaming=True,
+        )
+    except (ValueError, FileNotFoundError) as exc:
         if benchmark_id == "image-6":
             raise ValueError(
                 "The HuggingFace dataset does not currently expose an image-6 "

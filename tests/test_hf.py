@@ -23,9 +23,9 @@ def _install_fake_datasets(monkeypatch, load_dataset):
 
 
 def test_load_from_hub_materializes_image6_auxiliary_assets(monkeypatch, tmp_path):
-    def fake_load_dataset(repo_id, benchmark_id, split, streaming):
-        assert repo_id == "purvanshi/lica-data"
-        assert benchmark_id == "image-6"
+    def fake_load_dataset(path, data_files, split, streaming):
+        assert path == "parquet"
+        assert data_files == "hf://datasets/purvanshi/lica-data/gdb/image-6/train-*.parquet"
         assert split == "train"
         assert streaming is True
         return iter([
@@ -53,8 +53,8 @@ def test_load_from_hub_materializes_image6_auxiliary_assets(monkeypatch, tmp_pat
 
 
 def test_load_from_hub_image6_missing_config_error_is_actionable(monkeypatch):
-    def fake_load_dataset(repo_id, benchmark_id, split, streaming):
-        raise ValueError("BuilderConfig 'image-6' not found")
+    def fake_load_dataset(path, data_files, split, streaming):
+        raise FileNotFoundError(f"Unable to find '{data_files}'")
 
     _install_fake_datasets(monkeypatch, fake_load_dataset)
 

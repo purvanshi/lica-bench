@@ -1,45 +1,61 @@
 # Graphic-Design-Bench: A Comprehensive Benchmark for Evaluating AI on Graphic Design Tasks
 
 <div style='display:flex; gap: 0.25rem; '>
-<a href='https://huggingface.co/datasets/lica-world/GDB'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-GDBench-blue'></a>
+<a href='https://huggingface.co/datasets/purvanshi/lica-data'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-GDBench-blue'></a>
 <a href='https://huggingface.co/datasets/lica-world/GDB-video'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-GDBench--Video-blue'></a>
 <a href='https://arxiv.org/pdf/2604.04192'><img src='https://img.shields.io/badge/Paper-PDF-red'></a>
 </div>
 
-**lica-bench** is a structured evaluation suite for measuring how well vision-language models understand, edit, and generate graphic design artifacts. [Paper link](https://arxiv.org/pdf/2604.04192) 
-It covers layout reasoning, typography, visual hierarchy, SVG/vector understanding, template variants, animation, and more.
+**GDB** evaluates vision-language models on professional graphic design tasks — layout reasoning, typography, SVG editing, template matching, animation. The paper defines 49 evaluation tasks; this repo ships 44 benchmark pipelines covering all of them, organized into 7 code-level domains and built on the [Lica dataset](https://github.com/purvanshi/lica-dataset) (1,148 real design layouts).
 
-Benchmarks use the [Lica dataset](https://github.com/purvanshi/lica-dataset) (1,148 graphic design layouts). We release [design-benchmarks.zip](https://storage.googleapis.com/lica-assets/websites/blog/design-benchmarks.zip) containing all task-specific evaluation data organized under **`benchmarks/<domain>/`** (including manifests, JSON specifications, and prepared assets), along with model outputs for each task.
+**Paper:** [arXiv:2604.04192](https://arxiv.org/abs/2604.04192) &nbsp;|&nbsp; **Dataset:** [HuggingFace](https://huggingface.co/datasets/purvanshi/lica-data) &nbsp;|&nbsp; **Blog:** [lica.world](https://lica.world/blog/gdb-real-world-benchmark-for-graphic-design)
+
+We release [design-benchmarks.zip](https://huggingface.co/datasets/purvanshi/lica-data/blob/main/gdb/outputs/design-benchmarks.zip) containing all task-specific evaluation data organized under **`benchmarks/<domain>/`** (including manifests, JSON specifications, and prepared assets), along with model outputs for each task.
 
 ## Benchmarks
 
-Each task is one of two types: **understanding** (answer a question or edit an artifact), or **generation** (produce a new artifact). 45 tasks span seven domains across 39 benchmarks:
+Each task is either **understanding** or **generation**. The table counts repo-level
+benchmark pipelines and the paper-level evaluation tasks they score.
 
-| Domain | Tasks | Benchmarks | Description |
-|--------|------:|----------:|-------------|
+| Repo domain | Benchmarks | Paper tasks | Description |
+|---|--:|--:|---|
 | category | 2 | 2 | Design category classification and user intent prediction |
-| layout | 8 | 8 | Spatial reasoning over design canvases (aspect ratio, element counting, component type and detection), layout generation (intent-to-layout, partial completion, aspect-ratio adaptation), and layer-aware object insertion (`layout-8`, reference- or description-guided per sample) |
+| layout | 12 | 12 | Spatial reasoning over design canvases (aspect ratio, element counting, component type and detection, layer order, image rotation, crop shape, frame detection), layout generation (intent-to-layout, partial completion, aspect-ratio adaptation), and layer-aware object insertion (`layout-8`, reference- or description-guided per sample) |
 | lottie | 2 | 2 | Lottie animation generation from text and image |
 | svg | 8 | 8 | SVG reasoning and editing (perceptual and semantic Q/A, bug fixing, optimization, style editing) and generation (text-to-SVG, image-to-SVG, combined input) |
 | template | 5 | 5 | Template matching, retrieval, clustering, and generation (style completion, color transfer) |
-| temporal | 8 | 6 | Keyframe ordering; motion type classification; **video duration**, **component duration**, and **start-time** estimation (`temporal-3`, with motion type / speed / direction in the same benchmark); generation (animation parameters, motion trajectory, short-form video) |
-| typography | 12 | 8 | Font family, color, size / weight / alignment / letter spacing / line height* (single benchmark), style ranges, curvature, rotation, and generation (styled text element, styled text rendering to layout) |
+| temporal | 6 | 8 | Keyframe ordering; motion type classification; video/component duration and start-time estimation; generation (animation parameters, motion trajectory, short-form video) |
+| typography | 9 | 13 | Font family, color, size/weight/alignment/letter spacing/line height, style ranges, curvature, rotation, and generation (styled text element, styled text rendering to layout, text removal/background inpainting as `image-6`) |
+| **Totals** | **44** | **50** | |
 
-> \* `typography-3` (Text Params Estimation) expects one JSON object with five fields: `font_size`, `font_weight`, `text_align`, `letter_spacing`, and `line_height`.
+Benchmarks and paper tasks are not 1:1. Two benchmarks score multiple paper tasks from a
+single model call: `typography-3` extracts font size, weight, alignment, letter spacing,
+and line height as one JSON object (5 paper tasks), and `temporal-3` does the same for
+motion type plus three timing fields (4 paper tasks). This matches how a designer thinks
+about these attributes, and avoids issuing 9 separate prompts per sample.
 
-> † **Temporal (8 tasks, 6 benchmarks):** five understanding lines = `temporal-1`, `temporal-2`, and three timing lines from `temporal-3` (clip/video duration, per-component duration, start time—**start time is separate** from both duration lines). Three generation lines = `temporal-4`–`temporal-6`.
+Layer order (`layout-9`), image rotation (`layout-10`), crop shape (`layout-11`), and frame
+detection (`layout-12`) use the nested component tree, image alt text, and element subtypes of
+the v1 Lica layouts. Their samples ship in `benchmarks/layout/` (built with
+`scripts/build_lica_v1_tasks.py`); copy them into `data/gdb-dataset/benchmarks/layout/`. The
+images they reference are the renders in `lica-data/`, also available from the
+[LICA dataset](https://huggingface.co/datasets/purvanshi/lica-data).
 
-## Getting started
+## Setup
 
-### 1. Install
+### Install
+
+```bash
+pip install lica-gdb
+```
+
+Or install from source with extras:
 
 ```bash
 git clone https://github.com/purvanshi/lica-bench.git
 cd lica-bench
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
-
-# Add extras you need (pick any combination)
+pip install -e ".[hub]"              # Load data from HuggingFace (no download step)
 pip install -e ".[metrics]"          # scipy, sklearn, Pillow, cairosvg, etc.
 pip install -e ".[openai]"           # OpenAI provider
 pip install -e ".[gemini]"           # Gemini provider
@@ -50,99 +66,113 @@ pip install -e ".[layout-metrics]"   # Layout/image metrics (Linux + Python<3.12
 pip install -e ".[dev]"              # ruff linter
 ```
 
-The PyPI/setuptools distribution is **lica-bench**; import the library as **`design_benchmarks`**.
-
-### 2. Verify installation (no data, no API keys)
+### Verify
 
 ```bash
-python scripts/run_benchmarks.py --list                     # enumerate tasks and readiness
+gdb verify      # zero-config smoke test against a bundled fixture (~30s, no API keys)
+gdb list        # enumerate all 44 benchmarks
+gdb suites      # named suites: v0-all, v0-smoke, v0-understanding, v0-generation
 ```
 
-### 3. Download data
+See the note in `src/gdb/suites.py` on why suites are `v0-*` today and
+what `v1.0-*` will mean once the evaluation definitions are frozen.
+
+### Data
+
+Without `--dataset-root`, benchmarks are loaded directly from [HuggingFace](https://huggingface.co/datasets/purvanshi/lica-data) (requires the `.[hub]` extra). No download step needed.
+
+For local data (offline use, full benchmark coverage):
 
 ```bash
-python scripts/download_data.py                              # → data/lica-benchmarks-dataset/
+python scripts/download_data.py                 # → data/gdb-dataset/
 ```
 
-**`--dataset-root`** is the bundle root (contains `lica-data/` and `benchmarks/`). Task data is read from `benchmarks/` using each benchmark's metadata. Use **`--data`** to point at a specific directory.
+Then pass `--dataset-root data/gdb-dataset` to benchmark runs.
 
-### 4. Run benchmarks
+### Run benchmarks
 
 ```bash
-# Stub model (no API keys; validates load_data + build_model_input on real data)
-python scripts/run_benchmarks.py --stub-model --benchmarks category-1 \
-    --dataset-root data/lica-benchmarks-dataset --n 5
+# From HuggingFace (no local data needed)
+gdb eval --stub-model --benchmarks category-1 --n 5
+
+# From local data
+gdb eval --stub-model --benchmarks category-1 \
+    --dataset-root data/gdb-dataset --n 5
 
 # Real model
-python scripts/run_benchmarks.py --benchmarks svg-1 \
+gdb eval --benchmarks svg-1 \
     --provider openai --model-id gpt-5.4 \
-    --dataset-root data/lica-benchmarks-dataset
+    --dataset-root data/gdb-dataset
+
+# Whole suite
+gdb eval --suite v0-all \
+    --provider openai --model-id gpt-5.4 \
+    --dataset-root data/gdb-dataset
 
 # Temporal benchmarks (video-based)
-python scripts/run_benchmarks.py --benchmarks temporal-1 \
+gdb eval --benchmarks temporal-1 \
     --provider gemini \
-    --dataset-root data/lica-benchmarks-dataset
+    --dataset-root data/gdb-dataset
 
 # User custom python model entrypoint
-python scripts/run_benchmarks.py --benchmarks svg-1 \
+gdb eval --benchmarks svg-1 \
     --provider custom --custom-entry my_models.wrapper:build_model \
     --custom-init-kwargs '{"checkpoint":"/models/foo"}' \
-    --dataset-root data/lica-benchmarks-dataset
+    --dataset-root data/gdb-dataset
 
-# Local default VLM/LLM (defaults now use Qwen3-VL-4B-Instruct)
-python scripts/run_benchmarks.py --benchmarks svg-1 \
+# Local default VLM/LLM (defaults to Qwen3-VL-4B-Instruct)
+gdb eval --benchmarks svg-1 \
     --provider hf --device auto \
-    --dataset-root data/lica-benchmarks-dataset
+    --dataset-root data/gdb-dataset
 
-# Diffusion / image generation (defaults now use FLUX.2 klein 4B)
-python scripts/run_benchmarks.py --benchmarks layout-1 \
+# Diffusion / image generation (defaults to FLUX.2 klein 9B)
+gdb eval --benchmarks layout-1 \
     --provider diffusion \
-    --dataset-root data/lica-benchmarks-dataset
+    --dataset-root data/gdb-dataset
 
 # Image-generation / editing task with a custom wrapper
-python scripts/run_benchmarks.py --benchmarks typography-7 \
+gdb eval --benchmarks typography-7 \
     --provider custom --custom-entry my_models.image_wrapper:build_model \
     --custom-modality image_generation \
-    --dataset-root data/lica-benchmarks-dataset
+    --dataset-root data/gdb-dataset
 
 # Official FLUX.2 wrapper via the existing custom provider
 python -m pip install --no-deps --ignore-requires-python \
     "git+https://github.com/black-forest-labs/flux2.git"
-python scripts/run_benchmarks.py --benchmarks layout-1 layout-3 layout-8 typography-7 typography-8 \
+gdb eval --benchmarks layout-1 layout-3 layout-8 typography-7 typography-8 \
     --provider custom \
-    --custom-entry design_benchmarks.models.local_models:Flux2Model \
-    --custom-init-kwargs '{"model_name":"flux.2-klein-4b"}' \
+    --custom-entry gdb.models.local_models:Flux2Model \
+    --custom-init-kwargs '{"model_name":"flux.2-klein-9b"}' \
     --custom-modality image_generation \
-    --dataset-root data/lica-benchmarks-dataset
+    --dataset-root data/gdb-dataset
+
+# Batch submit (~50% cheaper, fire-and-forget) + collect later
+gdb submit --benchmarks svg-1 --provider gemini --credentials auth/key.json \
+    --dataset-root data/gdb-dataset
+gdb collect jobs/job_manifest.json
 ```
 
-`--custom-entry` must point to an importable Python module attribute. In practice,
-that means your wrapper is either installed in the environment or reachable via
-`PYTHONPATH`.
+`--custom-entry` must point to an importable module attribute (installed or reachable via `PYTHONPATH`). For image-output tasks, use `--custom-modality image_generation`.
 
-For image-output tasks, prefer `--custom-modality image_generation`. If your
-wrapper uses source images or masks, expose capability attributes such as
-`supports_image_output`, `supports_image_input`, and `supports_mask_editing`
-so preflight warnings can distinguish text-to-image from image-edit/inpaint models.
+See [scripts/README.md](scripts/README.md) for batch submit/collect, vLLM, HuggingFace, custom model entrypoints, multi-model configs, and all CLI flags.
 
-`design_benchmarks.models.local_models:Flux2Model` keeps using the existing
-`custom` provider, so no extra CLI provider is required. The official FLUX.2
-weights currently also require access to the gated
-`black-forest-labs/FLUX.2-dev` autoencoder (`ae.safetensors`); export
-`HF_TOKEN` / `HF_HUB_TOKEN` before running, or set `AE_MODEL_PATH` to a local
-copy of that file after approval.
+### HELM integration
 
-The default local model ID for both `hf` and `vllm` is now
-`Qwen/Qwen3-VL-4B-Instruct`, which can cover both text-only and image-input
-benchmarks. The default `diffusion` model ID is now `flux.2-klein-4b`.
+GDB benchmarks can also be run through Stanford CRFM's [HELM](https://github.com/stanford-crfm/helm) framework:
 
-Use the same **`--dataset-root`** (Lica bundle root) for stub runs, API runs, and **`--batch-submit`** so paths inside CSVs/JSON resolve correctly.
+```bash
+pip install lica-gdb-helm
 
-See [scripts/README.md](scripts/README.md) for batch submit/collect, vLLM, HuggingFace, user model entrypoints, multi-model config files, and all CLI flags.
+helm-run --run-entries gdb:benchmark_id=category-1,model=openai/gpt-4o \
+         --suite gdb-eval --max-eval-instances 50
 
-### 5. API keys
+helm-summarize --suite gdb-eval
+helm-server --suite gdb-eval
+```
 
-Set whichever provider(s) you need:
+All 40 benchmarks are available. See [integrations/helm/](integrations/helm/) for details.
+
+### API keys
 
 ```bash
 export OPENAI_API_KEY=sk-...
@@ -153,21 +183,21 @@ export GOOGLE_API_KEY=...            # Gemini (Google AI Studio / google-genai A
 For **Gemini on Vertex AI** (service account), pass a JSON key file instead of relying on `GOOGLE_API_KEY`:
 
 ```bash
-python scripts/run_benchmarks.py --benchmarks svg-1 --provider gemini \
+gdb eval --benchmarks svg-1 --provider gemini \
     --credentials /path/to/service-account.json \
-    --dataset-root data/lica-benchmarks-dataset
+    --dataset-root data/gdb-dataset
 ```
 
 The file must be either a **service account** key (`type: service_account`) or JSON containing an `api_key` field.
 
-**Batch submit** for Gemini also needs a GCS bucket (`--bucket` or `DESIGN_BENCHMARKS_GCS_BUCKET`); see [scripts/README.md](scripts/README.md).
+Batch submit for Gemini also needs a GCS bucket (`--bucket` or `GDB_GCS_BUCKET`); see [scripts/README.md](scripts/README.md).
 
-## Benchmark dataset layout
+## Dataset layout
 
-Everything lives under one root directory **`lica-benchmarks-dataset/`** (e.g. `data/lica-benchmarks-dataset/` after `download_data.py`):
+The local data bundle (`python scripts/download_data.py`) unpacks as:
 
 ```
-lica-benchmarks-dataset/
+gdb-dataset/
 ├── lica-data/                    # core Lica release (layouts, renders, metadata)
 │   ├── metadata.csv              # one row per layout
 │   ├── layouts/<template_id>/<layout_id>.json
@@ -185,15 +215,13 @@ lica-benchmarks-dataset/
     └── typography/
 ```
 
-**Using this bundle:** Set **`--dataset-root`** to this directory. CSV `image_path` and template `data_root` entries resolve relative to **`--dataset-root`**.
-
-**What the two trees are:** **`lica-data/`** is the shared Lica corpus (layout JSON, renders, `metadata.csv`). **`benchmarks/`** holds evaluation payloads per domain (CSVs, JSON, manifests, copied assets). Exact filenames differ by task; see the module under `src/design_benchmarks/tasks/<domain>.py` or [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) when adding or packaging data.
+`--dataset-root` points here. `lica-data/` is the shared Lica corpus; `benchmarks/` holds per-domain evaluation inputs. See `src/gdb/tasks/<domain>.py` or [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for details.
 
 ## Project structure
 
 ```
 lica-bench/
-├── src/design_benchmarks/
+├── src/gdb/
 │   ├── tasks/              # @benchmark classes — one file per domain
 │   │   ├── category.py     #   category-1, category-2
 │   │   ├── layout.py       #   layout-1 … layout-8
@@ -201,7 +229,7 @@ lica-bench/
 │   │   ├── svg.py          #   svg-1 … svg-8
 │   │   ├── template.py     #   template-1 … template-5
 │   │   ├── temporal.py     #   temporal-1 … temporal-6
-│   │   └── typography.py   #   typography-1 … typography-8
+│   │   └── typography.py   #   typography-1 … typography-8 + image-6 implementation
 │   ├── models/             # Provider wrappers (OpenAI, Anthropic, Gemini, HF, vLLM)
 │   ├── metrics/            # Reusable metric functions (IoU, FID, SSIM, LPIPS, edit distance)
 │   ├── evaluation/
@@ -210,51 +238,52 @@ lica-bench/
 │   ├── inference/          # Batch API runners, GCS helpers
 │   ├── utils/              # Shared helpers (image, text, layout path resolution)
 │   ├── base.py             # BaseBenchmark, BenchmarkMeta, TaskType, @benchmark
+│   ├── hf.py               # Load samples from HuggingFace Hub
 │   ├── registry.py         # Auto-discovery via pkgutil.walk_packages
 │   └── runner.py           # BenchmarkRunner orchestration
 ├── scripts/
-│   ├── download_data.py    # Fetch + unpack into lica-benchmarks-dataset/
-│   └── run_benchmarks.py   # Unified CLI for list, stub, real, and batch runs
+│   ├── download_data.py         # Fetch + unpack into gdb-dataset/
+│   ├── build_verify_dataset.py  # Rebuild the bundled `gdb verify` fixture
+│   ├── run_benchmarks.py        # Deprecated; kept as a shim for existing scripts
+│   └── upload_to_hf.py          # Upload dataset to HuggingFace Hub
+├── integrations/
+│   └── helm/               # HELM plugin (lica-gdb-helm on PyPI)
 ├── docs/
 │   └── CONTRIBUTING.md     # How to add tasks and domains
 └── pyproject.toml
 ```
 
-## Quick start (Python API)
+## Python API
 
 ```python
-from pathlib import Path
-from design_benchmarks import BenchmarkRegistry, BenchmarkRunner
-from design_benchmarks.models import load_model
+from gdb import BenchmarkRegistry, BenchmarkRunner, load_from_hub
+from gdb.models import load_model
 
-root = Path("data/lica-benchmarks-dataset")
+# Load samples from HuggingFace (no local data needed)
+samples = load_from_hub("category-1", n=10)
+
+# Or use the full pipeline with local data
 registry = BenchmarkRegistry()
 registry.discover()
-
 runner = BenchmarkRunner(registry)
 models = {"openai": load_model("openai", model_id="gpt-5.4")}
+
+# Without dataset_root → loads from HuggingFace automatically
+report = runner.run(benchmark_ids=["category-1"], models=models, n=5)
+
+# With dataset_root → loads from local files
 report = runner.run(
     benchmark_ids=["svg-1"],
     models=models,
-    dataset_root=root,
+    dataset_root="data/gdb-dataset",
     n=5,
 )
 print(report.summary())
-report.save("outputs/report.json")
-runner.tracker.save("outputs/tracker.jsonl")
 ```
-
-`RunReport` includes both metric scores and reliability counters per benchmark/model:
-`count`, `success_count`, `failure_count`, and `failure_rate`. This makes partial-run
-failures visible in terminal summaries and saved JSON/CSV reports.
 
 ## Contributing
 
-See **[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)** for:
-
-- How to add a benchmark task to an existing domain
-- How to create a new domain module
-- Where benchmark inputs live in the Lica release and the PR checklist
+See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 ## Motion-generation evaluation
 
@@ -263,14 +292,14 @@ For tracker + motion-correctness evaluation of generated animation videos
 [`scripts/motion_gen_eval/README.md`](scripts/motion_gen_eval/README.md).
 The library lives in [`src/motion_gen_eval/`](src/motion_gen_eval/) and the
 runners in [`scripts/motion_gen_eval/`](scripts/motion_gen_eval/). It is a
-fully optional add-on that is not loaded by `scripts/run_benchmarks.py`;
+fully optional add-on that is not loaded by `gdb eval`;
 install it with `pip install -e ".[motion-gen-eval]"`.
 
-## Limitations
+## Known issues
 
-- Some metrics (LPIPS, CLIP score, SSIM, CIEDE2000) need heavier extras (`.[svg-metrics]`, `.[lottie-metrics]`, `.[layout-metrics]`). The full `.[layout-metrics]` stack is enabled on Linux with Python < 3.12. Metrics whose dependencies are unavailable are omitted from the output (with a logged warning).
-- **`--provider`** picks which backend runs the model (OpenAI, Gemini, Anthropic, etc.); **`--model-id`** is only the catalog string for *that* backend (it does not select the provider). If you omit **`--model-id`**, the default for the chosen provider is used (see `DEFAULT_MODEL_IDS` in `scripts/run_benchmarks.py`). With **`--multi-models`**, each entry is **`provider:model_id`** so both are explicit. Use a **`--model-id`** your account actually exposes (README examples may name newer IDs such as `gpt-5.4`).
-- For local/open-source models, **`--model-id`** may be either a hub ID or a local checkpoint directory if the underlying backend supports it. If the model name/path does not make its modality obvious, set **`--model-modality text`** or **`--model-modality text_and_image`** explicitly.
+- Some metrics (LPIPS, CLIP score, SSIM, CIEDE2000) need heavier extras (`.[svg-metrics]`, `.[lottie-metrics]`, `.[layout-metrics]`). Full `.[layout-metrics]` requires Linux + Python < 3.12. Missing metric deps are skipped with a warning.
+- `--provider` picks the backend; `--model-id` is the catalog string within that backend. With `--multi-models`, each entry is `provider:model_id`.
+- For local models, `--model-id` can be a hub ID or local path. Pass `--model-modality text` or `--model-modality text_and_image` if ambiguous.
 
 ## Models
 
@@ -285,33 +314,26 @@ install it with `pip install -e ".[motion-gen-eval]"`.
 | OpenAI Image | `.[openai]` | `--provider openai_image` |
 | Custom Entrypoint | (your code) | `--provider custom --custom-entry module:attr` |
 
-### Evaluation extras
+### Eval extras
 
-| Extra | Contents | Used by |
-|-------|----------|---------|
-| `.[metrics]` | scipy, sklearn, scikit-image, Pillow, cairosvg | All implemented tasks (clustering, color, SVG rendering) |
-| `.[svg-metrics]` | metrics + torch, transformers, lpips | SVG generation (LPIPS, CLIP score) |
-| `.[lottie-metrics]` | metrics + rlottie-python | Lottie generation (frame MSE, frame SSIM) |
-| `.[layout-metrics]` | torch, transformers (+ Linux/Python<3.12: pyiqa, hpsv2, hpsv3, dreamsim, image-reward) | Layout / image generation (FID, HPSv2/v3, DreamSim) |
-
-## Dataset
-
-The [Lica dataset](https://github.com/purvanshi/lica-dataset) underpins the initial benchmark release:
-
-- 1,148 graphic design layouts across 9 design categories
-- Structured JSON annotations (components, positions, styles, descriptions)
-- Rendered images (PNG) and animations (MP4)
-- Download: `python scripts/download_data.py`
+| Extra | What it adds |
+|-------|-------------|
+| `.[metrics]` | scipy, sklearn, scikit-image, Pillow, cairosvg |
+| `.[svg-metrics]` | + torch, transformers, lpips |
+| `.[lottie-metrics]` | + rlottie-python |
+| `.[layout-metrics]` | + pyiqa, hpsv2, hpsv3, dreamsim, image-reward (Linux + Python < 3.12) |
 
 ## Citation
 
-If you use this benchmark, please cite the original LICA dataset:
-
 ```bibtex
-@misc{lica-dataset,
-  author = {Mehta, Purvanshi and others},
-  title  = {LICA: Open-Source Graphic Design Layout Dataset},
-  year   = {2025},
-  url    = {https://github.com/purvanshi/lica-dataset}
+@article{gdb2026,
+  title={GDB: A Real-World Benchmark for Graphic Design},
+  author={Deganutti, Adrienne and Hirsch, Elad and Zhu, Haonan and Seol, Jaejung and Mehta, Purvanshi},
+  journal={arXiv preprint arXiv:2604.04192},
+  year={2026}
 }
 ```
+
+## License
+
+Apache 2.0
